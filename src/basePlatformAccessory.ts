@@ -1,5 +1,5 @@
 import { PlatformAccessory, Logger, API, Characteristic, CharacteristicValue, Service, WithUUID } from 'homebridge';
-import axios = require('axios');
+import axios, { AxiosInstance } from 'axios';
 import { IKHomeBridgeHomebridgePlatform } from './platform';
 import { ShortEvent } from './webhook/subscriptionHandler';
 
@@ -28,7 +28,7 @@ export abstract class BasePlatformAccessory {
   protected log: Logger;
   protected baseURL: string;
   protected key: string;
-  protected axInstance: axios.AxiosInstance;
+  protected axInstance: AxiosInstance;
   protected commandURL: string;
   protected statusURL: string;
   protected healthURL: string;
@@ -60,7 +60,7 @@ export abstract class BasePlatformAccessory {
     this.api = platform.api;
     const headerDict = { 'Authorization': 'Bearer: ' + this.key };
 
-    this.axInstance = axios.default.create({
+    this.axInstance = axios.create({
       baseURL: this.baseURL,
       headers: headerDict,
     });

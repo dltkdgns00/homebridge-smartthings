@@ -7,7 +7,7 @@ import {
   Logger,
   API,
 } from 'homebridge';
-import axios = require('axios');
+import axios, { AxiosInstance } from 'axios';
 import { IKHomeBridgeHomebridgePlatform } from './platform';
 import { BaseService } from './services/baseService';
 import { MotionService } from './services/motionService';
@@ -178,7 +178,7 @@ export class MultiServiceAccessory {
   protected log: Logger;
   protected baseURL: string;
   protected key: string;
-  protected axInstance: axios.AxiosInstance;
+  protected axInstance: AxiosInstance;
   protected commandURL: string;
   protected statusURL: string;
   protected healthURL: string;
@@ -210,7 +210,7 @@ export class MultiServiceAccessory {
     this.api = platform.api;
     const headerDict = { Authorization: 'Bearer: ' + this.key };
 
-    this.axInstance = axios.default.create({
+    this.axInstance = axios.create({
       baseURL: this.baseURL,
       headers: headerDict,
       timeout: 15000,

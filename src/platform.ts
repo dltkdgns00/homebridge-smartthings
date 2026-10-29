@@ -1,7 +1,7 @@
 import { API, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service, Characteristic } from 'homebridge';
 
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
-import axios = require('axios');
+import axios, { AxiosInstance } from 'axios';
 //import { BasePlatformAccessory } from './basePlatformAccessory';
 import { MultiServiceAccessory } from './multiServiceAccessory';
 import { SubscriptionHandler } from './webhook/subscriptionHandler';
@@ -22,7 +22,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
   private roomsIDsToIgnore: string[] = [];
 
   private headerDict: { Authorization: string };
-  private axInstance: axios.AxiosInstance;
+  private axInstance: AxiosInstance;
 
   private accessoryObjects: MultiServiceAccessory[] = [];
   private subscriptionHandler: SubscriptionHandler | undefined = undefined;
@@ -37,7 +37,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     this.headerDict = {
       'Authorization': 'Bearer: ' + this.config.AccessToken,
     };
-    this.axInstance = axios.default.create({
+    this.axInstance = axios.create({
       baseURL: this.config.BaseURL,
       headers: this.headerDict,
     });

@@ -1,5 +1,5 @@
 //import { RequestBody, ResponseBody } from '../webhook/subscriptionHandler;
-import axios = require('axios');
+import axios, { AxiosInstance } from 'axios';
 //import { BasePlatformAccessory } from '../basePlatformAccessory';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { Logger, PlatformConfig } from 'homebridge';
@@ -32,7 +32,7 @@ export class SubscriptionHandler {
   private log: Logger;
   private shutdown = false;
 
-  private axInstance: axios.AxiosInstance;
+  private axInstance: AxiosInstance;
 
   constructor(platform: IKHomeBridgeHomebridgePlatform, devices: MultiServiceAccessory[]) {
     this.config = platform.config;
@@ -47,7 +47,7 @@ export class SubscriptionHandler {
       'Keep-Alive': 'timeout=120, max=1000',
     };
 
-    this.axInstance = axios.default.create({
+    this.axInstance = axios.create({
       baseURL: WEBHOOK_URL,
       headers: headerDict,
       timeout: 90000,
