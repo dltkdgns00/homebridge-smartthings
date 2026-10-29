@@ -1,0 +1,27 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.SmokeDetectorService = void 0;
+const sensorService_1 = require("./sensorService");
+class SmokeDetectorService extends sensorService_1.SensorService {
+    constructor(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus) {
+        super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
+        this.initService(platform.Service.SmokeSensor, platform.Characteristic.SmokeDetected, (status) => {
+            if (status.smokeDetector.smoke.value === null || status.smokeDetector.smoke.value === undefined) {
+                this.log.warn(`${this.name} returned bad value for status`);
+                throw ('Bad Value');
+            }
+            return status.smokeDetector.smoke.value === 'detected' ?
+                this.platform.Characteristic.SmokeDetected.SMOKE_DETECTED :
+                this.platform.Characteristic.SmokeDetected.SMOKE_NOT_DETECTED;
+        });
+        this.log.debug(`Adding SmokeDetector Service to ${this.name}`);
+    }
+    processEvent(event) {
+        this.log.debug(`Event updating smoke detected for ${this.name} to ${event.value}`);
+        this.service.updateCharacteristic(this.platform.Characteristic.SmokeDetected, event.value === 'detected' ?
+            this.platform.Characteristic.SmokeDetected.SMOKE_DETECTED :
+            this.platform.Characteristic.SmokeDetected.SMOKE_NOT_DETECTED);
+    }
+}
+exports.SmokeDetectorService = SmokeDetectorService;
+//# sourceMappingURL=smokeDetector.js.map
