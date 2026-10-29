@@ -13,6 +13,16 @@ This is a smartthings plugin for Homebridge.  This requires no access to the leg
 require a lot of work to install.  It will discover devices automatically as well as unregister devices that are removed
 from your smarttthings network.  This is currently under development.
 
+## New in version 1.6.0 (Maintained by SangHoon Lee)
+* Added support for Samsung Robot Vacuums (Jet Bot and standard robot cleaners) with clean/dock switch and battery status.
+* Added support for Samsung Smart TVs (Television service with Apple TV remote widget, volume control, and input selection).
+* Added global API request throttling and 429 Too Many Requests backoff protection.
+* Fixed persistent offline bug caused by premature /health checks.
+* Fixed missing return in getStatus() that caused offline devices to trigger excessive API requests.
+* Fixed AirConditionerService cache busting bug and guarded against null/undefined status values.
+* Improved Korean floor heating (ThermostatService) support (mode, switch, and expanded 5~40°C temperature range).
+* Modernized TypeScript/ES6 imports, updated dependencies, and improved Homebridge v2 and Node 22/26 compatibility.
+
 ## Fixed in version 1.5.20
 * Fixed discovery of devices issue where some fans were set up as lights
 ## Fixed in version 1.5.19
