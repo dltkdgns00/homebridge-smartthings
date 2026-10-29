@@ -1,8 +1,15 @@
-import { PlatformAccessory, Characteristic, CharacteristicValue, Service, WithUUID, Logger, API } from 'homebridge';
+import {
+  PlatformAccessory,
+  Characteristic,
+  CharacteristicValue,
+  Service,
+  WithUUID,
+  Logger,
+  API,
+} from 'homebridge';
 import axios = require('axios');
 import { IKHomeBridgeHomebridgePlatform } from './platform';
 import { BaseService } from './services/baseService';
-// import { BasePlatformAccessory } from './basePlatformAccessory';
 import { MotionService } from './services/motionService';
 import { BatteryService } from './services/batteryService';
 import { TemperatureService } from './services/temperatureService';
@@ -25,54 +32,51 @@ import { WindowCoveringService } from './services/windowCoveringService';
 import { ThermostatService } from './services/thermostatService';
 import { StatelessProgrammableSwitchService } from './services/statelessProgrammableSwitchService';
 import { AirConditionerService } from './services/airConditionerService';
+import { RobotVacuumService } from './services/robotVacuumService';
+import { TelevisionService } from './services/televisionService';
 import { Command } from './services/smartThingsCommand';
-// type DeviceStatus = {
-//   timestamp: number;
-//   //status: Record<string, unknown>;
-//   status: any;
-// };
 
 /**
  * Platform Accessory
  * An instance of this class is created for each accessory your platform registers
  * Each accessory may expose multiple services of different service types.
  */
-// export class MultiServiceAccessory extends BasePlatformAccessory {
 export class MultiServiceAccessory {
-  //  service: Service;
-  //capabilities;
   components: {
     componentId: string;
     capabilities: string[];
     status: Record<string, unknown>;
   }[] = [];
 
-  /**
-   * These are just used to create a working example
-   * You should implement your own code to track the state of your accessory
-   */
-
   private services: BaseService[] = [];
 
-  // Order of these matters.  Make sure secondary capabilities like 'battery' and 'contactSensor' are at the end.
+  // Global request throttling and 429 rate-limit protection
+  private static requestQueue: Promise<void> = Promise.resolve();
+  private static rateLimitResetTime = 0;
+  private static readonly MIN_REQUEST_INTERVAL_MS = 120;
+
+  // Order of these matters. Make sure secondary capabilities like 'battery' and 'contactSensor' are at the end.
   private static capabilityMap = {
-    'doorControl': DoorService,
-    'lock': LockService,
-    'switch': SwitchService,
-    'windowShadeLevel': WindowCoveringService,
-    'windowShade': WindowCoveringService,
-    'motionSensor': MotionService,
-    'waterSensor': LeakDetectorService,
-    'smokeDetector': SmokeDetectorService,
-    'carbonMonoxideDetector': CarbonMonoxideDetectorService,
-    'presenceSensor': OccupancySensorService,
-    'temperatureMeasurement': TemperatureService,
-    'relativeHumidityMeasurement': HumidityService,
-    'illuminanceMeasurement': LightSensorService,
-    'contactSensor': ContactSensorService,
-    'button': StatelessProgrammableSwitchService,
-    'battery': BatteryService,
-    'valve': ValveService,
+    doorControl: DoorService,
+    lock: LockService,
+    'samsungce.robotCleanerOperatingState': RobotVacuumService,
+    robotCleanerMovement: RobotVacuumService,
+    robotCleanerCleaningMode: RobotVacuumService,
+    switch: SwitchService,
+    windowShadeLevel: WindowCoveringService,
+    windowShade: WindowCoveringService,
+    motionSensor: MotionService,
+    waterSensor: LeakDetectorService,
+    smokeDetector: SmokeDetectorService,
+    carbonMonoxideDetector: CarbonMonoxideDetectorService,
+    presenceSensor: OccupancySensorService,
+    temperatureMeasurement: TemperatureService,
+    relativeHumidityMeasurement: HumidityService,
+    illuminanceMeasurement: LightSensorService,
+    contactSensor: ContactSensorService,
+    button: StatelessProgrammableSwitchService,
+    battery: BatteryService,
+    valve: ValveService,
   };
 
   // Maps combinations of supported capabilities to a service
@@ -89,8 +93,39 @@ export class MultiServiceAccessory {
         'fanOscillationMode',
         'relativeHumidityMeasurement',
         'custom.airConditionerOptionalMode',
+        'switchLevel',
       ],
       service: AirConditionerService,
+    },
+    {
+      capabilities: ['switch', 'audioVolume'],
+      optionalCapabilities: [
+        'audioMute',
+        'tvChannel',
+        'mediaInputSource',
+        'samsungvd.mediaInputSource',
+        'mediaPlayback',
+      ],
+      service: TelevisionService,
+    },
+    {
+      capabilities: ['samsungce.robotCleanerOperatingState'],
+      optionalCapabilities: [
+        'robotCleanerMovement',
+        'robotCleanerCleaningMode',
+        'switch',
+      ],
+      service: RobotVacuumService,
+    },
+    {
+      capabilities: ['robotCleanerMovement'],
+      optionalCapabilities: ['robotCleanerCleaningMode', 'switch'],
+      service: RobotVacuumService,
+    },
+    {
+      capabilities: ['robotCleanerCleaningMode'],
+      optionalCapabilities: ['switch'],
+      service: RobotVacuumService,
     },
     {
       capabilities: ['switch', 'fanSpeed', 'switchLevel'],
@@ -117,16 +152,13 @@ export class MultiServiceAccessory {
       service: ValveService,
     },
     {
-      capabilities: ['temperatureMeasurement',
+      capabilities: ['temperatureMeasurement', 'thermostatHeatingSetpoint'],
+      optionalCapabilities: [
         'thermostatMode',
-        'thermostatHeatingSetpoint',
-        'thermostatCoolingSetpoint'],
-      service: ThermostatService,
-    },
-    {
-      // There is a heater out there that just supports thermostatMode and thermostatHeatingSetpoint
-      capabilities: ['temperatureMeasurement',
-        'thermostatHeatingSetpoint'],
+        'thermostatCoolingSetpoint',
+        'thermostatOperatingState',
+        'switch',
+      ],
       service: ThermostatService,
     },
     {
@@ -152,7 +184,6 @@ export class MultiServiceAccessory {
   protected healthURL: string;
   protected api: API;
   protected online = true;
-  //protected deviceStatus: DeviceStatus = { timestamp: 0, status: undefined };
   protected deviceStatusTimestamp = 0;
   protected failureCount = 0;
   protected giveUpTime = 0;
@@ -169,9 +200,7 @@ export class MultiServiceAccessory {
   constructor(
     platform: IKHomeBridgeHomebridgePlatform,
     accessory: PlatformAccessory,
-    // capabilities,
   ) {
-
     this.accessory = accessory;
     this.platform = platform;
     this.name = accessory.context.device.label;
@@ -179,33 +208,46 @@ export class MultiServiceAccessory {
     this.baseURL = platform.config.BaseURL;
     this.key = platform.config.AccessToken;
     this.api = platform.api;
-    const headerDict = { 'Authorization': 'Bearer: ' + this.key };
+    const headerDict = { Authorization: 'Bearer: ' + this.key };
 
     this.axInstance = axios.default.create({
       baseURL: this.baseURL,
       headers: headerDict,
+      timeout: 15000,
     });
 
-    this.commandURL = 'devices/' + accessory.context.device.deviceId + '/commands';
+    this.commandURL =
+      'devices/' + accessory.context.device.deviceId + '/commands';
     this.statusURL = 'devices/' + accessory.context.device.deviceId + '/status';
     this.healthURL = 'devices/' + accessory.context.device.deviceId + '/health';
     this.characteristic = platform.Characteristic;
 
     // set accessory information
-    accessory.getService(platform.Service.AccessoryInformation)!
-      .setCharacteristic(platform.Characteristic.Manufacturer, accessory.context.device.manufacturerName)
+    accessory
+      .getService(platform.Service.AccessoryInformation)!
+      .setCharacteristic(
+        platform.Characteristic.Manufacturer,
+        accessory.context.device.manufacturerName || 'SmartThings',
+      )
       .setCharacteristic(platform.Characteristic.Model, 'Default-Model')
-      .setCharacteristic(platform.Characteristic.SerialNumber, 'Default-Serial');
+      .setCharacteristic(
+        platform.Characteristic.SerialNumber,
+        'Default-Serial',
+      );
+  }
 
-    // // Find out if we are online
-    this.axInstance.get(this.healthURL)
-      .then(res => {
-        if (res.data.state === 'ONLINE') {
-          this.online = true;
-        } else {
-          this.online = false;
-        }
-      });
+  private static enqueueStatusRequest<T>(fn: () => Promise<T>): Promise<T> {
+    const next = MultiServiceAccessory.requestQueue.then(async () => {
+      const waitMs = MultiServiceAccessory.rateLimitResetTime - Date.now();
+      if (waitMs > 0) {
+        await new Promise((r) => setTimeout(r, Math.min(waitMs, 5000)));
+      }
+      await new Promise((r) =>
+        setTimeout(r, MultiServiceAccessory.MIN_REQUEST_INTERVAL_MS),
+      );
+    });
+    MultiServiceAccessory.requestQueue = next.catch(() => undefined);
+    return next.then(fn);
   }
 
   private registerServiceIfMatchesCapabilities(
@@ -216,22 +258,34 @@ export class MultiServiceAccessory {
     optionalCapabilities: string[],
     serviceConstructor: any,
   ): string[] {
-    // this.log.debug(`Testing ${serviceConstructor.name} for capabilities ${capabilitiesToCover}`);
     // ignore services which cannot cover all required capabilities
-    if (!capabilities.every(e => capabilitiesToCover.includes(e))) {
-      // this.log.debug(`Ignoring ${serviceConstructor.name}`);
+    if (!capabilities.every((e) => capabilitiesToCover.includes(e))) {
       return capabilitiesToCover;
     }
 
-    const allCapabilities = capabilities.concat(optionalCapabilities.filter(e => capabilitiesToCover.includes(e)));
+    const allCapabilities = capabilities.concat(
+      optionalCapabilities.filter((e) => capabilitiesToCover.includes(e)),
+    );
 
-    this.log.debug(`Creating instance of ${serviceConstructor.name} for capabilities ${allCapabilities}`);
-    const serviceInstance = new serviceConstructor(this.platform, this.accessory, componentId, allCapabilities, this, this.name, component);
+    this.log.debug(
+      `Creating instance of ${serviceConstructor.name} for capabilities ${allCapabilities}`,
+    );
+    const serviceInstance = new serviceConstructor(
+      this.platform,
+      this.accessory,
+      componentId,
+      allCapabilities,
+      this,
+      this.name,
+      component,
+    );
     this.services.push(serviceInstance);
 
-    this.log.debug(`Registered ${serviceConstructor.name} for capabilities ${allCapabilities}`);
+    this.log.debug(
+      `Registered ${serviceConstructor.name} for capabilities ${allCapabilities}`,
+    );
     // remove covered capabilities and return unused
-    return capabilitiesToCover.filter(e => !allCapabilities.includes(e));
+    return capabilitiesToCover.filter((e) => !allCapabilities.includes(e));
   }
 
   public addComponent(componentId: string, capabilities: string[]) {
@@ -242,14 +296,12 @@ export class MultiServiceAccessory {
     };
     this.components.push(component);
 
-
     let capabilitiesToCover = [...capabilities];
 
     // Start with comboServices and remove used capabilities to avoid duplicated sensors.
-    // For example, there is no need to expose a temperature sensor in case of a thermostat which already exposes that charateristic.
     MultiServiceAccessory.comboCapabilityMap
-      .sort((a, b) => a.capabilities.length > b.capabilities.length ? -1 : 1) // services with larger capability set first
-      .forEach(entry => {
+      .sort((a, b) => (a.capabilities.length > b.capabilities.length ? -1 : 1))
+      .forEach((entry) => {
         capabilitiesToCover = this.registerServiceIfMatchesCapabilities(
           componentId,
           component,
@@ -274,76 +326,130 @@ export class MultiServiceAccessory {
   }
 
   public isOnline(): boolean {
+    if (
+      !this.online &&
+      this.giveUpTime > 0 &&
+      Date.now() - this.giveUpTime > 5 * 60 * 1000
+    ) {
+      this.log.info(`Re-enabling ${this.name} after offline cooldown`);
+      this.online = true;
+      this.giveUpTime = 0;
+      this.failureCount = 0;
+    }
     return this.online;
   }
 
   // Find return if a capability is supported by the multi-service accessory
   public static capabilitySupported(capability: string): boolean {
-    if (Object.keys(MultiServiceAccessory.capabilityMap).find(c => c === capability)) {
+    if (
+      Object.keys(MultiServiceAccessory.capabilityMap).find(
+        (c) => c === capability,
+      )
+    ) {
       return true;
-    } else {
-      return false;
     }
+    for (const entry of MultiServiceAccessory.comboCapabilityMap) {
+      if (entry.capabilities.includes(capability)) {
+        return true;
+      }
+    }
+    return false;
   }
 
-  // public async refreshStatus(): Promise<boolean> {
-  //   return super.refreshStatus();
-  // }
+  private hasCachedStatus(): boolean {
+    return this.components.some(
+      (c) => c.status && Object.keys(c.status).length > 0,
+    );
+  }
 
-  // Called by subclasses to refresh the status for the device.  Will only refresh if it has been more than
-  // 4 seconds since last refresh
-  //
+  // Called by subclasses to refresh the status for the device.
   async refreshStatus(): Promise<boolean> {
     return new Promise((resolve) => {
-      this.log.debug(`Refreshing status for ${this.name} - current timestamp is ${this.deviceStatusTimestamp}`);
-      if (Date.now() - this.deviceStatusTimestamp > 5000) {
+      this.log.debug(
+        `Refreshing status for ${this.name} - current timestamp is ${this.deviceStatusTimestamp}`,
+      );
+      if (Date.now() - this.deviceStatusTimestamp > 8000) {
         // If there is already a call to smartthings to update status for this device, don't issue another one until
         // we return from that.
         if (this.statusQueryInProgress) {
-          this.log.debug(`Status query already in progress for ${this.name}.  Waiting...`);
-          this.waitFor(() => !this.statusQueryInProgress).then(() => resolve(this.lastStatusResult));
+          this.log.debug(
+            `Status query already in progress for ${this.name}. Waiting...`,
+          );
+          this.waitFor(() => !this.statusQueryInProgress).then(() =>
+            resolve(this.lastStatusResult),
+          );
           return;
         }
+
+        // If global rate limit cooldown is active and we already have cached status, reuse it to avoid 429 errors
+        if (
+          Date.now() < MultiServiceAccessory.rateLimitResetTime &&
+          this.hasCachedStatus()
+        ) {
+          this.log.debug(
+            `Rate limit cooldown active, reusing cached status for ${this.name}`,
+          );
+          resolve(true);
+          return;
+        }
+
         this.log.debug(`Calling Smartthings to get an update for ${this.name}`);
         this.statusQueryInProgress = true;
-        this.failureCount = 0;
         this.waitFor(() => this.commandInProgress === false).then(() => {
-          this.lastStatusResult = true;
-          this.axInstance.get(this.statusURL).then((res) => {
-            const componentsStatus = res.data.components;
-            this.components.forEach(component => {
-              if (componentsStatus[component.componentId] !== undefined) {
-                component.status = componentsStatus[component.componentId];
-                this.deviceStatusTimestamp = Date.now();
-                this.log.debug(`Updated status for ${this.name}-${component.componentId}: ${JSON.stringify(component.status)}`);
-              } else {
-                this.log.error(`Failed to get status for ${this.name}-${component.componentId}`);
+          MultiServiceAccessory.enqueueStatusRequest(() =>
+            this.axInstance.get(this.statusURL),
+          )
+            .then((res) => {
+              const componentsStatus = res.data?.components || {};
+              this.failureCount = 0;
+              this.online = true;
+              this.giveUpTime = 0;
+              this.lastStatusResult = true;
+              this.deviceStatusTimestamp = Date.now();
+              this.components.forEach((component) => {
+                if (componentsStatus[component.componentId] !== undefined) {
+                  component.status = componentsStatus[component.componentId];
+                  this.log.debug(
+                    `Updated status for ${this.name}-${component.componentId}: ${JSON.stringify(component.status)}`,
+                  );
+                } else {
+                  this.log.error(
+                    `Failed to get status for ${this.name}-${component.componentId}`,
+                  );
+                }
+              });
+              this.statusQueryInProgress = false;
+              resolve(true);
+            })
+            .catch((error) => {
+              const statusCode = error?.response?.status;
+              if (statusCode === 429) {
+                const retryAfter =
+                  Number(error?.response?.headers?.['retry-after']) || 15;
+                MultiServiceAccessory.rateLimitResetTime =
+                  Date.now() + retryAfter * 1000;
+                this.log.warn(
+                  `SmartThings API rate limit (429) hit while querying ${this.name}. Backing off for ${retryAfter}s.`,
+                );
+                this.statusQueryInProgress = false;
+                resolve((this.lastStatusResult = this.hasCachedStatus()));
+                return;
               }
+
+              this.failureCount++;
+              this.log.error(
+                `Failed to request status from ${this.name}: ${error}. This is failure number ${this.failureCount}`,
+              );
+              if (this.failureCount >= 5) {
+                this.log.error(
+                  `Exceeded allowed failures for ${this.name}. Device is offline (will retry in 5 minutes)`,
+                );
+                this.giveUpTime = Date.now();
+                this.online = false;
+              }
+              this.statusQueryInProgress = false;
+              resolve((this.lastStatusResult = false));
             });
-            this.statusQueryInProgress = false;
-            resolve(true);
-            // if (res.data.components.main !== undefined) {
-            //   this.deviceStatus.status = res.data.components.main;
-            //   this.deviceStatus.timestamp = Date.now();
-            //   this.log.debug(`Updated status for ${this.name}: ${JSON.stringify(this.deviceStatus.status)}`);
-            //   this.statusQueryInProgress = false;
-            //   resolve(true);
-            // } else {
-            //   this.log.debug(`No status returned for ${this.name}`);
-            //   this.statusQueryInProgress = false;
-            //   resolve(this.lastStatusResult = false);
-            // }
-          }).catch(error => {
-            this.failureCount++;
-            this.log.error(`Failed to request status from ${this.name}: ${error}.  This is failure number ${this.failureCount}`);
-            if (this.failureCount >= 5) {
-              this.log.error(`Exceeded allowed failures for ${this.name}.  Device is offline`);
-              this.giveUpTime = Date.now();
-              this.online = false;
-            }
-            this.statusQueryInProgress = false;
-            resolve(this.lastStatusResult = false);
-          });
         });
       } else {
         resolve(true);
@@ -355,62 +461,68 @@ export class MultiServiceAccessory {
     this.deviceStatusTimestamp = 0;
   }
 
-
-  // public startPollingState(pollSeconds: number, getValue: () => Promise<CharacteristicValue>, service: Service,
-  //   chracteristic: WithUUID<new () => Characteristic>, targetStateCharacteristic?: WithUUID<new () => Characteristic>,
-  //   getTargetState?: () => Promise<CharacteristicValue>) {
-  //   return super.startPollingState(pollSeconds, getValue, service, chracteristic, targetStateCharacteristic, getTargetState);
-  // }
-
-  startPollingState(pollSeconds: number, getValue: () => Promise<CharacteristicValue>, service: Service,
-    chracteristic: WithUUID<new () => Characteristic>, targetStateCharacteristic?: WithUUID<new () => Characteristic>,
-    getTargetState?: () => Promise<CharacteristicValue>): NodeJS.Timer | void {
-
-    if (this.platform.config.WebhookToken && this.platform.config.WebhookToken !== '') {
-      return;  // Don't poll if we have a webhook token
+  startPollingState(
+    pollSeconds: number,
+    getValue: () => Promise<CharacteristicValue>,
+    service: Service,
+    chracteristic: WithUUID<new () => Characteristic>,
+    targetStateCharacteristic?: WithUUID<new () => Characteristic>,
+    getTargetState?: () => Promise<CharacteristicValue>,
+  ): ReturnType<typeof setInterval> | void {
+    if (
+      this.platform.config.WebhookToken &&
+      this.platform.config.WebhookToken !== ''
+    ) {
+      return; // Don't poll if we have a webhook token
     }
 
     if (pollSeconds > 0) {
-      return setInterval(() => {
-        // If we are in the middle of a commmand call, or it hasn't been at least 10 seconds, we don't want to poll.
-        if (this.commandInProgress || Date.now() - this.lastCommandCompleted < 20 * 1000) {
-          // Skip polling until command is complete
-          this.log.debug(`Command in progress, skipping polling for ${this.name}`);
-          return;
-        }
-        if (this.online) {
-          this.log.debug(`${this.name} polling...`);
-          // this.commandInProgress = true;
-          getValue().then((v) => {
-            service.updateCharacteristic(chracteristic, v);
-            this.log.debug(`${this.name} value updated.`);
-          }).catch(() => {  // If we get an error, ignore
-            this.log.warn(`Poll failure on ${this.name}`);
+      return setInterval(
+        () => {
+          // If we are in the middle of a command call, or it hasn't been at least 20 seconds, we don't want to poll.
+          if (
+            this.commandInProgress ||
+            Date.now() - this.lastCommandCompleted < 20 * 1000
+          ) {
+            this.log.debug(
+              `Command in progress, skipping polling for ${this.name}`,
+            );
             return;
-          });
-          // Update target if we have to
-          if (targetStateCharacteristic && getTargetState) {
-            //service.updateCharacteristic(targetStateCharacteristic, getTargetState());
-            getTargetState().then(value => service.updateCharacteristic(targetStateCharacteristic, value));
           }
-        } else {
-          // If we failed this accessory due to errors. Reset the failure count and online status after 10 minutes.
-          if (this.giveUpTime > 0 && (Date.now() - this.giveUpTime > (10 * 60 * 1000))) {
-            this.axInstance.get(this.healthURL)
-              .then(res => {
-                if (res.data.state === 'ONLINE') {
-                  this.online = true;
-                  this.giveUpTime = 0;
-                  this.failureCount = 0;
-                }
+          if (this.isOnline()) {
+            this.log.debug(`${this.name} polling...`);
+            getValue()
+              .then((v) => {
+                service.updateCharacteristic(chracteristic, v);
+                this.log.debug(`${this.name} value updated.`);
+              })
+              .catch(() => {
+                this.log.debug(`Poll failure on ${this.name}`);
+                return;
               });
+            // Update target if we have to
+            if (targetStateCharacteristic && getTargetState) {
+              getTargetState()
+                .then((value) =>
+                  service.updateCharacteristic(
+                    targetStateCharacteristic,
+                    value,
+                  ),
+                )
+                .catch(() => undefined);
+            }
           }
-        }
-      }, pollSeconds * 1000 + Math.floor(Math.random() * 1000));  // Add a random delay to avoid collisions
+        },
+        pollSeconds * 1000 + Math.floor(Math.random() * 3000),
+      );
     }
   }
 
-  async sendCommand(capability: string, command: string, args?: unknown[]): Promise<boolean> {
+  async sendCommand(
+    capability: string,
+    command: string,
+    args?: unknown[],
+  ): Promise<boolean> {
     const cmd = new Command(capability, command, args);
     return this.sendCommands([cmd]);
   }
@@ -420,34 +532,36 @@ export class MultiServiceAccessory {
     return new Promise((resolve) => {
       this.waitFor(() => !this.commandInProgress).then(() => {
         this.commandInProgress = true;
-        this.axInstance.post(this.commandURL, commandBody).then(() => {
-          this.log.debug(`${JSON.stringify(commands)} successful for ${this.name}`);
-          this.deviceStatusTimestamp = 0; // Force a refresh on next poll after a state change
-          this.commandInProgress = false;
-          resolve(true);
-          // Force a small delay so that status fetch is correct
-          // setTimeout(() => {
-          //   this.log.debug(`Delay complete for ${this.name}`);
-          //   this.commandInProgress = false;
-          //   resolve(true);
-          // }, 1500);
-        }).catch((error) => {
-          this.commandInProgress = false;
-          this.log.error(`${JSON.stringify(commands)} failed for ${this.name}: ${error}`);
-          resolve(false);
-        });
+        this.axInstance
+          .post(this.commandURL, commandBody)
+          .then(() => {
+            this.log.debug(
+              `${JSON.stringify(commands)} successful for ${this.name}`,
+            );
+            this.deviceStatusTimestamp = 0; // Force a refresh on next poll after a state change
+            this.lastCommandCompleted = Date.now();
+            this.commandInProgress = false;
+            resolve(true);
+          })
+          .catch((error) => {
+            this.commandInProgress = false;
+            this.log.error(
+              `${JSON.stringify(commands)} failed for ${this.name}: ${error}`,
+            );
+            resolve(false);
+          });
       });
     });
   }
 
-  // Wait for the condition to be true.  Will check every 500 ms
+  // Wait for the condition to be true. Will check every 250 ms
   private async waitFor(condition: () => boolean): Promise<void> {
     if (condition()) {
       return;
     }
 
     this.log.debug(`${this.name} command or request is waiting...`);
-    return new Promise(resolve => {
+    return new Promise((resolve) => {
       const interval = setInterval(() => {
         if (condition()) {
           this.log.debug(`${this.name} command or request is proceeding.`);
@@ -462,13 +576,17 @@ export class MultiServiceAccessory {
   public processEvent(event: ShortEvent): void {
     this.log.debug(`Received events for ${this.name}`);
 
-    const service = this.services.find(s => s.componentId === event.componentId && s.capabilities.find(c => c === event.capability));
+    const service = this.services.find(
+      (s) =>
+        s.componentId === event.componentId &&
+        s.capabilities.find((c) => c === event.capability),
+    );
 
     if (service) {
-      this.log.debug(`Event for ${this.name}:${event.componentId} - ${event.value}`);
+      this.log.debug(
+        `Event for ${this.name}:${event.componentId} - ${event.value}`,
+      );
       service.processEvent(event);
     }
-
   }
-
 }

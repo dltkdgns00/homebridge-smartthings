@@ -35,13 +35,15 @@ export class BaseService {
   }
 
   protected findCapability(capabilityToFind: string): boolean {
-    let component;
-    component = this.accessory.context.device.components.find(c => c.id === 'main');
+    let component = this.accessory.context.device.components.find(c => c.id === this.componentId);
+    if (component === undefined) {
+      component = this.accessory.context.device.components.find(c => c.id === 'main');
+    }
     if (component === undefined) {
       component = this.accessory.context.device.components[0];
     }
 
-    return component.capabilities.find(c => c.id === capabilityToFind);
+    return Boolean(component?.capabilities?.find(c => c.id === capabilityToFind));
   }
 
   protected setServiceType(serviceType: WithUUID<typeof Service>) {
@@ -58,22 +60,15 @@ export class BaseService {
   }
 
   protected async getStatus(): Promise<boolean> {
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    // this.log.debug('Received getMotion() event for ' + this.name);
-
     return new Promise((resolve) => {
       if (!this.multiServiceAccessory.isOnline()) {
-        this.log.info(`${this.name} is offline`);
+        this.log.debug(`${this.name} is offline`);
         resolve(false);
+        return;
       }
       this.multiServiceAccessory.refreshStatus()
         .then(success => {
-          if (!success) {
-            resolve(false);
-          } else {
-            resolve(true);
-          }
+          resolve(Boolean(success));
         });
     });
   }

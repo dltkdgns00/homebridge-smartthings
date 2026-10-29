@@ -39,7 +39,7 @@ export class FanSwitchLevelService extends BaseService {
   async setSwitchState(value: CharacteristicValue) {
     this.log.debug('Received setSwitchState(' + value + ') event for ' + this.name);
 
-    if (!this.multiServiceAccessory.isOnline) {
+    if (!this.multiServiceAccessory.isOnline()) {
       this.log.error(this.name + ' is offline');
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
@@ -109,14 +109,13 @@ export class FanSwitchLevelService extends BaseService {
           return reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
         }
 
-        if (this.deviceStatus.status.switchLevel.level.value !== undefined) {
+        if (this.deviceStatus?.status?.switchLevel?.level?.value !== undefined &&
+            this.deviceStatus?.status?.switchLevel?.level?.value !== null) {
           level = this.deviceStatus.status.switchLevel.level.value;
           this.log.debug('getLevel() SUCCESSFUL for ' + this.name + '. value = ' + level);
           resolve(level);
-
         } else {
-          this.log.error('getLevel() FAILED for ' + this.name + '. Undefined value');
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
+          resolve(0);
         }
       });
     });

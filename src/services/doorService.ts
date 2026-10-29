@@ -80,7 +80,7 @@ export class DoorService extends BaseService {
 
     this.targetState = value as number;
 
-    if (!this.multiServiceAccessory.isOnline) {
+    if (!this.multiServiceAccessory.isOnline()) {
       this.log.error(this.name + ' is offline');
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }

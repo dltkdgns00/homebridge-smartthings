@@ -6,265 +6,333 @@ import { ShortEvent } from '../webhook/subscriptionHandler';
 
 export class ThermostatService extends BaseService {
   targetHeatingCoolingState: any;
-  targetTemperature: any;
+  targetTemperature = 20;
   units = 'C';
   supportsOperatingState = false;
+  supportsCooling = false;
 
-  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
+  constructor(
+    platform: IKHomeBridgeHomebridgePlatform,
+    accessory: PlatformAccessory,
+    componentId: string,
+    capabilities: string[],
     multiServiceAccessory: MultiServiceAccessory,
-    name: string, deviceStatus) {
+    name: string,
+    deviceStatus,
+  ) {
     super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
+    const existingSwitch = this.accessory.getService(platform.Service.Switch);
+    if (existingSwitch) {
+      this.accessory.removeService(existingSwitch);
+    }
+
     this.setServiceType(platform.Service.Thermostat);
-    // Set the event handlers
-    this.log.debug(`Adding ThermostatService to ${this.name}`);
+    this.log.debug(`Adding ThermostatService to ${this.name} with capabilities: ${capabilities.join(', ')}`);
 
     const component = this.multiServiceAccessory.components.find((c) => c.componentId === componentId);
     if (component && component.capabilities.find((cap) => cap === 'thermostatOperatingState')) {
-    //if (this.multiServiceAccessory.capabilities.find((c) => c.id === 'thermostatOperatingState')) {
       this.supportsOperatingState = true;
     }
-    this.service.getCharacteristic(platform.Characteristic.CurrentHeatingCoolingState)
+    this.supportsCooling = this.capabilities.includes('thermostatCoolingSetpoint');
+
+    const TargetState = platform.Characteristic.TargetHeatingCoolingState;
+    const CurrentState = platform.Characteristic.CurrentHeatingCoolingState;
+
+    this.service.getCharacteristic(CurrentState)
       .onGet(this.getCurrentHeatingCoolingState.bind(this));
-    this.service.getCharacteristic(platform.Characteristic.TargetHeatingCoolingState)
+
+    const targetStateChar = this.service.getCharacteristic(TargetState)
       .onGet(this.getTargetHeatingCoolingState.bind(this))
       .onSet(this.setTargetHeatingCoolingState.bind(this));
+
+    if (!this.supportsCooling) {
+      targetStateChar.setProps({
+        validValues: [
+          TargetState.OFF,
+          TargetState.HEAT,
+        ],
+      });
+    }
+
     this.service.getCharacteristic(platform.Characteristic.CurrentTemperature)
+      .setProps({ minValue: -20, maxValue: 100 })
       .onGet(this.getCurrentTemperature.bind(this));
+
     this.service.getCharacteristic(platform.Characteristic.TargetTemperature)
+      .setProps({ minValue: 5, maxValue: 40, minStep: 0.5 })
       .onGet(this.getTargetTemperature.bind(this))
       .onSet(this.setTargetTemperature.bind(this));
+
     this.service.getCharacteristic(platform.Characteristic.TemperatureDisplayUnits)
       .onGet(this.getTemperatureDisplayUnits.bind(this))
       .onSet(this.setTemperatureDisplayUnits.bind(this));
 
-    this.targetHeatingCoolingState = platform.Characteristic.TargetHeatingCoolingState.OFF;
+    this.targetHeatingCoolingState = TargetState.OFF;
     this.targetTemperature = 20;
 
-    // TODO: get the current mode and set targetHeatingCoolingState
-
-    // set targets
-
-    this.getCurrentHeatingCoolingState().then((value) => this.targetHeatingCoolingState = value);
-    this.getCurrentTemperature().then((value) => this.targetTemperature = value as number);
-
-    let pollSensors = 10; // default to 10 seconds
+    let pollSensors = 10;
     if (this.platform.config.PollSensorsSeconds !== undefined) {
       pollSensors = this.platform.config.PollSensorsSeconds;
     }
 
     if (pollSensors > 0) {
-      multiServiceAccessory.startPollingState(pollSensors, this.getCurrentHeatingCoolingState.bind(this), this.service,
-        platform.Characteristic.CurrentHeatingCoolingState, platform.Characteristic.TargetHeatingCoolingState,
-        this.getTargetHeatingCoolingState.bind(this));
+      multiServiceAccessory.startPollingState(
+        pollSensors,
+        this.getCurrentHeatingCoolingState.bind(this),
+        this.service,
+        CurrentState,
+        TargetState,
+        this.getTargetHeatingCoolingState.bind(this),
+      );
 
-      multiServiceAccessory.startPollingState(pollSensors, this.getCurrentTemperature.bind(this), this.service,
+      multiServiceAccessory.startPollingState(
+        pollSensors,
+        this.getCurrentTemperature.bind(this),
+        this.service,
         platform.Characteristic.CurrentTemperature,
-        platform.Characteristic.TargetTemperature, this.getTargetTemperature.bind(this));
+        platform.Characteristic.TargetTemperature,
+        this.getTargetTemperature.bind(this),
+      );
     }
   }
 
+  private hasCapability(cap: string): boolean {
+    return this.capabilities.includes(cap);
+  }
+
   // TARGET STATE CALLBACKS
-  async getTargetHeatingCoolingState():Promise<CharacteristicValue> {
+  async getTargetHeatingCoolingState(): Promise<CharacteristicValue> {
     this.log.debug('Received getTargetHeatingCoolingState for ' + this.name);
-    return new Promise((resolve) => {
-      // If we don't have the capability of thermostatMode, then just return AUTO
-      if (this.capabilities.find((c) => c === 'thermostatMode') === undefined) {
-        resolve(this.targetHeatingCoolingState = this.platform.Characteristic.TargetHeatingCoolingState.AUTO);
-        return;
+    const TargetState = this.platform.Characteristic.TargetHeatingCoolingState;
+
+    const success = await this.getStatus();
+    if (!success) {
+      return this.targetHeatingCoolingState;
+    }
+
+    const status = this.deviceStatus?.status;
+    if (!status) {
+      return this.targetHeatingCoolingState;
+    }
+
+    if (this.hasCapability('thermostatMode')) {
+      const state = status.thermostatMode?.thermostatMode?.value;
+      if (state === null || state === undefined) {
+        return this.targetHeatingCoolingState;
       }
-      this.getStatus().then(success => {
-        let state;
-        if (success) {
-          state = this.deviceStatus.status.thermostatMode.thermostatMode.value;
-          if (state === null || state === undefined) {
-            this.log.error(`Received invalid heating / cooling state from ${this.name}`);
-            resolve(this.targetHeatingCoolingState);
-            return;
-          }
-          switch(state) {
-            case 'cool':
-              resolve(this.targetHeatingCoolingState = this.platform.Characteristic.TargetHeatingCoolingState.COOL);
-              return;
+      switch (String(state).toLowerCase()) {
+        case 'cool':
+          this.targetHeatingCoolingState = this.supportsCooling ? TargetState.COOL : TargetState.HEAT;
+          break;
+        case 'heat':
+        case 'emergency heat':
+        case 'on':
+        case 'eco':
+          this.targetHeatingCoolingState = TargetState.HEAT;
+          break;
+        case 'auto':
+          this.targetHeatingCoolingState = this.supportsCooling ? TargetState.AUTO : TargetState.HEAT;
+          break;
+        default:
+          this.targetHeatingCoolingState = TargetState.OFF;
+          break;
+      }
+      return this.targetHeatingCoolingState;
+    }
 
-            case 'heat':
-              resolve(this.targetHeatingCoolingState = this.platform.Characteristic.TargetHeatingCoolingState.HEAT);
-              return;
+    if (this.hasCapability('switch')) {
+      const sw = status.switch?.switch?.value;
+      this.targetHeatingCoolingState = sw === 'on' ? TargetState.HEAT : TargetState.OFF;
+      return this.targetHeatingCoolingState;
+    }
 
-            case 'auto':
-              resolve(this.targetHeatingCoolingState = this.platform.Characteristic.TargetHeatingCoolingState.AUTO);
-              return;
-
-            default:
-              resolve(this.targetHeatingCoolingState = this.platform.Characteristic.TargetHeatingCoolingState.OFF);
-              return;
-          }
-        } else {
-          resolve(this.targetHeatingCoolingState);
-          return;
-        }
-      });
-    });
+    this.targetHeatingCoolingState = this.supportsCooling ? TargetState.AUTO : TargetState.HEAT;
+    return this.targetHeatingCoolingState;
   }
 
   // Set the target state of the thermostat
   async setTargetHeatingCoolingState(value: CharacteristicValue) {
     this.log.debug('Received setTargetHeatingCoolingState(' + value + ') event for ' + this.name);
 
-    if (!this.multiServiceAccessory.isOnline) {
+    if (!this.multiServiceAccessory.isOnline()) {
       this.log.error(this.name + ' is offline');
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
 
     this.targetHeatingCoolingState = value;
+    const TargetState = this.platform.Characteristic.TargetHeatingCoolingState;
 
-    if (this.capabilities.find((c) => c === 'thermostatMode') === undefined) {
-      this.log.debug(`Thermostat ${this.name} does not support thermostatMode.  Ignoring request`);
-      return;
-    }
+    if (this.hasCapability('thermostatMode')) {
+      let cmd = 'off';
+      switch (value) {
+        case TargetState.AUTO:
+          cmd = this.supportsCooling ? 'auto' : 'heat';
+          break;
+        case TargetState.COOL:
+          cmd = 'cool';
+          break;
+        case TargetState.HEAT:
+          cmd = 'heat';
+          break;
+        default:
+          cmd = 'off';
+          break;
+      }
 
-    let cmd = '';
-    switch (value) {
-      case this.platform.Characteristic.TargetHeatingCoolingState.AUTO:
-        cmd = 'auto';
-        break;
-
-      case this.platform.Characteristic.TargetHeatingCoolingState.COOL:
-        cmd = 'cool';
-        break;
-
-      case this.platform.Characteristic.TargetHeatingCoolingState.HEAT:
-        cmd = 'heat';
-        break;
-
-      default:
-        cmd = 'off';
-        break;
-    }
-
-    this.multiServiceAccessory.sendCommand('thermostatMode', cmd).then((success) => {
+      const success = await this.multiServiceAccessory.sendCommand('thermostatMode', cmd);
       if (success) {
         this.log.debug('setTargetHeatingCoolingState(' + value + ') SUCCESSFUL for ' + this.name);
-        //this.deviceStatus.timestamp = 0;  // Force a refresh next query.
+        this.multiServiceAccessory.forceNextStatusRefresh();
       } else {
         this.log.error(`Command failed for ${this.name}`);
       }
-    });
+      return;
+    }
+
+    if (this.hasCapability('switch')) {
+      const cmd = value === TargetState.OFF ? 'off' : 'on';
+      const success = await this.multiServiceAccessory.sendCommand('switch', cmd);
+      if (success) {
+        this.multiServiceAccessory.forceNextStatusRefresh();
+      }
+      return;
+    }
+
+    this.log.debug(`Thermostat ${this.name} does not support thermostatMode or switch. Ignoring request`);
   }
 
   // CURRENT STATE
   async getCurrentHeatingCoolingState(): Promise<CharacteristicValue> {
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     this.log.debug('Received getCurrentHeatingCoolingState() event for ' + this.name);
+    const CurrentState = this.platform.Characteristic.CurrentHeatingCoolingState;
 
-    return new Promise((resolve, reject) => {
+    const success = await this.getStatus();
+    if (!success) {
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
 
-      if (this.capabilities.find((c) => c === 'thermostatMode') === undefined) {
-        this.log.debug(`Thermostat ${this.name} does not support thermostatMode.  Returning OFF`);
-        resolve(this.platform.Characteristic.CurrentHeatingCoolingState.OFF);
-        return;
+    const status = this.deviceStatus?.status;
+    if (!status) {
+      return CurrentState.OFF;
+    }
+
+    if (this.hasCapability('thermostatMode')) {
+      const thermostatMode = status.thermostatMode?.thermostatMode?.value;
+      if (thermostatMode === null || thermostatMode === undefined) {
+        return CurrentState.OFF;
       }
 
-      this.getStatus().then(success => {
-        if (success) {
-          let thermostatMode;
-          try {
-            thermostatMode = this.deviceStatus.status.thermostatMode.thermostatMode.value;
-          } catch (error) {
-            this.log.warn(`Missing thermostatMode from ${this.name}`);
-            resolve(this.targetHeatingCoolingState);
-            return;
-          }
-          this.log.debug(`thermostatMode value from ${this.name}: ${thermostatMode}`);
+      switch (String(thermostatMode).toLowerCase()) {
+        case 'cool':
+          return CurrentState.COOL;
+        case 'heat':
+        case 'emergency heat':
+        case 'auto':
+        case 'on':
+        case 'eco':
+          return CurrentState.HEAT;
+        default:
+          return CurrentState.OFF;
+      }
+    }
 
-          switch (thermostatMode) {
-            case 'cool':
-              resolve(this.platform.Characteristic.CurrentHeatingCoolingState.COOL);
-              break;
+    if (this.hasCapability('switch')) {
+      const sw = status.switch?.switch?.value;
+      return sw === 'on' ? CurrentState.HEAT : CurrentState.OFF;
+    }
 
-            case 'heat':
-              resolve(this.platform.Characteristic.CurrentHeatingCoolingState.HEAT);
-              break;
+    if (this.supportsOperatingState) {
+      const opState = status.thermostatOperatingState?.thermostatOperatingState?.value;
+      if (opState === 'heating') {
+        return CurrentState.HEAT;
+      } else if (opState === 'cooling') {
+        return CurrentState.COOL;
+      }
+    }
 
-            default:
-              resolve(this.platform.Characteristic.CurrentHeatingCoolingState.OFF);
-          }
-        } else {
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-      });
-    });
+    return CurrentState.OFF;
   }
 
   // CURRENT TEMP
   async getCurrentTemperature(): Promise<CharacteristicValue> {
     this.log.debug('Received getCurrentTemperature for ' + this.name);
-    return new Promise((resolve) => {
-      this.getStatus().then((success) => {
-        if (success) {
-          if (this.deviceStatus.status.temperatureMeasurement.temperature.value === null ||
-            this.deviceStatus.status.temperatureMeasurement.temperature.value === undefined ||
-            this.deviceStatus.status.temperatureMeasurement.temperature.unit === null ||
-            this.deviceStatus.status.temperatureMeasurement.temperature.value === undefined) {
-            this.log.warn(`${this.name} returned bad value for status`);
-            throw ('Bad Value');
-          }
-          if (this.deviceStatus.status.temperatureMeasurement.temperature.unit === 'F') {
-            this.log.debug('Converting temp to celcius');
-            this.units = 'F';
-            resolve((this.deviceStatus.status.temperatureMeasurement.temperature.value as number - 32) * (5 / 9)); // Convert to Celcius
-          } else {
-            this.units = 'C';
-            resolve(this.deviceStatus.status.temperatureMeasurement.temperature.value);
-          }
-        } else {
-          // reject (new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-          // For some reason, when homekit makes this call and it fails, Homebridge crashes.  So we will simply return zero.
-          this.log.warn(`Failed to get status for ${this.name}`);
-          resolve(0);
-        }
-      });
-    });
+    const success = await this.getStatus();
+    if (!success) {
+      this.log.debug(`Failed to get status for ${this.name}`);
+      return this.targetTemperature || 20;
+    }
+
+    const tempObj = this.deviceStatus?.status?.temperatureMeasurement?.temperature;
+    if (!tempObj || tempObj.value === null || tempObj.value === undefined) {
+      this.log.debug(`${this.name} returned empty value for temperature`);
+      return this.targetTemperature || 20;
+    }
+
+    const num = Number(tempObj.value);
+    if (isNaN(num)) {
+      return this.targetTemperature || 20;
+    }
+
+    if (tempObj.unit === 'F') {
+      this.units = 'F';
+      return (num - 32) * (5 / 9);
+    }
+
+    this.units = 'C';
+    return num;
   }
 
   // TARGET TEMP
-  async getTargetTemperature():Promise<CharacteristicValue> {
+  async getTargetTemperature(): Promise<CharacteristicValue> {
     this.log.debug('Received GetTargetTemperature for ' + this.name);
-    let temp;
-    if (await this.getTargetHeatingCoolingState() === this.platform.Characteristic.TargetHeatingCoolingState.COOL) {
-      temp = this.deviceStatus.status.thermostatCoolingSetpoint.coolingSetpoint.value;
+    const success = await this.getStatus();
+    if (!success || !this.deviceStatus?.status) {
+      return this.targetTemperature;
+    }
+
+    const TargetState = this.platform.Characteristic.TargetHeatingCoolingState;
+    const targetMode = await this.getTargetHeatingCoolingState();
+
+    let temp: number | undefined;
+    if (this.supportsCooling && targetMode === TargetState.COOL) {
+      temp = this.deviceStatus.status.thermostatCoolingSetpoint?.coolingSetpoint?.value;
     } else {
-      temp = this.deviceStatus.status.thermostatHeatingSetpoint.heatingSetpoint.value;
+      temp = this.deviceStatus.status.thermostatHeatingSetpoint?.heatingSetpoint?.value;
     }
-    if (temp === null || temp === undefined) {
-      throw(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.RESOURCE_DOES_NOT_EXIST));
+
+    if (temp === null || temp === undefined || isNaN(Number(temp))) {
+      return this.targetTemperature;
     }
+
+    let converted = Number(temp);
     if (this.units === 'F') {
-      temp = (temp - 32) * (5 / 9); // Convert to C
+      converted = (converted - 32) * (5 / 9);
     }
-    this.targetTemperature = temp;
-    return temp;
+
+    converted = Math.min(Math.max(converted, 5), 40);
+    this.targetTemperature = converted;
+    return converted;
   }
 
   async setTargetTemperature(value: CharacteristicValue) {
     this.log.debug('Received setTargetTemperature(' + value + ') event for ' + this.name);
-    this.targetTemperature = value as number;
-    let capability = '';
-    let command = '';
-
-    if (this.targetHeatingCoolingState === this.platform.Characteristic.TargetHeatingCoolingState.COOL) {
-      capability = 'thermostatCoolingSetpoint';
-      command = 'setCoolingSetpoint';
-    } else {
-      capability = 'thermostatHeatingSetpoint';
-      command = 'setHeatingSetpoint';
+    if (!this.multiServiceAccessory.isOnline()) {
+      this.log.error(this.name + ' is offline');
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
 
-    // If the thermostat's units is Farenheit, then we need to convert from celcius
-    const convertedTemp = this.units === 'F' ? (value as number * (9/5)) + 32 : value;
+    this.targetTemperature = value as number;
+    let capability = 'thermostatHeatingSetpoint';
+    let command = 'setHeatingSetpoint';
 
-    this.multiServiceAccessory.sendCommand(capability, command, [convertedTemp]);
+    if (this.supportsCooling && this.targetHeatingCoolingState === this.platform.Characteristic.TargetHeatingCoolingState.COOL) {
+      capability = 'thermostatCoolingSetpoint';
+      command = 'setCoolingSetpoint';
+    }
+
+    const convertedTemp = this.units === 'F' ? ((value as number) * (9 / 5)) + 32 : value;
+    await this.multiServiceAccessory.sendCommand(capability, command, [convertedTemp]);
   }
 
   // DISPLAY UNITS
@@ -278,8 +346,7 @@ export class ThermostatService extends BaseService {
   }
 
   setTemperatureDisplayUnits(value: CharacteristicValue) {
-    // Nothing to do as there is no way to send this off to Smartthings
-    this.log.debug(`Received request to set display units to ${value}.  No equivalent in Smartthings...`);
+    this.log.debug(`Received request to set display units to ${value}. No equivalent in Smartthings...`);
     return;
   }
 
@@ -289,27 +356,30 @@ export class ThermostatService extends BaseService {
     let value: CharacteristicValue;
 
     if (event.attribute === 'heatingSetpoint' || event.attribute === 'coolingSetpoint') {
-      value = this.units === 'F' ? (event.value - 32) * (5 / 9): event.value;
+      const raw = this.units === 'F' ? (event.value - 32) * (5 / 9) : Number(event.value);
+      value = Math.min(Math.max(raw, 5), 40);
     } else {
       characteristic = this.platform.Characteristic.TargetHeatingCoolingState;
-      switch (event.value) {
+      switch (String(event.value).toLowerCase()) {
         case 'cool':
-          value = this.platform.Characteristic.TargetHeatingCoolingState.COOL;
+          value = this.supportsCooling
+            ? this.platform.Characteristic.TargetHeatingCoolingState.COOL
+            : this.platform.Characteristic.TargetHeatingCoolingState.HEAT;
           break;
-
         case 'heat':
+        case 'on':
+        case 'eco':
           value = this.platform.Characteristic.TargetHeatingCoolingState.HEAT;
           break;
-
         case 'auto':
-          value = this.platform.Characteristic.TargetHeatingCoolingState.AUTO;
+          value = this.supportsCooling
+            ? this.platform.Characteristic.TargetHeatingCoolingState.AUTO
+            : this.platform.Characteristic.TargetHeatingCoolingState.HEAT;
           break;
-
         default:
           value = this.platform.Characteristic.TargetHeatingCoolingState.OFF;
       }
     }
     this.service.updateCharacteristic(characteristic, value);
   }
-
 }

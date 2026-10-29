@@ -9,7 +9,7 @@ export abstract class SensorService extends BaseService {
     return null;
   };
 
-  pollingTimer: NodeJS.Timer | void | undefined;
+  pollingTimer: ReturnType<typeof setInterval> | void | undefined;
 
   characteristic: WithUUID<new () => Characteristic> | undefined;
 

@@ -12,8 +12,8 @@ import { SubscriptionHandler } from './webhook/subscriptionHandler';
  * parse the user config and discover/register accessories with Homebridge.
  */
 export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
-  public readonly Service: typeof Service = this.api.hap.Service;
-  public readonly Characteristic: typeof Characteristic = this.api.hap.Characteristic;
+  public readonly Service: typeof Service;
+  public readonly Characteristic: typeof Characteristic;
 
   // this is used to track restored cached accessories
   public readonly accessories: PlatformAccessory[] = [];
@@ -21,14 +21,8 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
   private locationIDsToIgnore: string[] = [];
   private roomsIDsToIgnore: string[] = [];
 
-  private headerDict = {
-    'Authorization': 'Bearer: ' + this.config.AccessToken,
-  };
-
-  private axInstance = axios.default.create({
-    baseURL: this.config.BaseURL,
-    headers: this.headerDict,
-  });
+  private headerDict: { Authorization: string };
+  private axInstance: axios.AxiosInstance;
 
   private accessoryObjects: MultiServiceAccessory[] = [];
   private subscriptionHandler: SubscriptionHandler | undefined = undefined;
@@ -38,6 +32,16 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     public readonly config: PlatformConfig,
     public readonly api: API,
   ) {
+    this.Service = this.api.hap.Service;
+    this.Characteristic = this.api.hap.Characteristic;
+    this.headerDict = {
+      'Authorization': 'Bearer: ' + this.config.AccessToken,
+    };
+    this.axInstance = axios.default.create({
+      baseURL: this.config.BaseURL,
+      headers: this.headerDict,
+    });
+
     this.log.debug('Finished initializing platform:', this.config.name);
 
     // When this event is fired it means Homebridge has restored all cached accessories from disk.
@@ -91,7 +95,8 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
     return new Promise((resolve) => {
       this.axInstance.get('locations').then(res => {
         res.data.items.forEach(location => {
-          if (this.config.IgnoreLocations.find(l => l.toLowerCase() === location.name.toLowerCase())) {
+          if (location && location.name &&
+            this.config.IgnoreLocations.find(l => typeof l === 'string' && l.toLowerCase() === location.name.toLowerCase())) {
             this.locationIDsToIgnore.push(location.locationId);
           }
         });
@@ -128,8 +133,7 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
             deviceName = device.label;
           }
           if (this.config.IgnoreDevices &&
-          //this.config.IgnoreDevices.find(d => d.replaceAll(String.fromCharCode(8217), '\'').toLowerCase() === deviceName.toLowerCase())) {
-            this.config.IgnoreDevices.find(d => d.toLowerCase() === deviceName.toLowerCase())) {
+            this.config.IgnoreDevices.find(d => typeof d === 'string' && d.toLowerCase() === deviceName.toLowerCase())) {
             this.log.info(`Ignoring ${device.label} because it is in the Ignore Devices list`);
             return;
           }
@@ -199,9 +203,8 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
           // the accessory already exists
           this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
 
-          // if you need to update the accessory.context then you should run `api.updatePlatformAccessories`. eg.:
-          // existingAccessory.context.device = device;
-          // this.api.updatePlatformAccessories([existingAccessory]);
+          existingAccessory.context.device = device;
+          this.api.updatePlatformAccessories([existingAccessory]);
 
           // create the accessory handler for the restored accessory
           // this is imported from `platformAccessory.ts`
