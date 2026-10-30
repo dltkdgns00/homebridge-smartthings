@@ -46,15 +46,20 @@ class SensorService extends baseService_1.BaseService {
                     catch (error) {
                         this.statusFailureCount++;
                         if (this.statusFailureCount > 5) {
-                            this.log.error(`Bad status from ${this.name}.  Removing this service.`);
-                            // Stop polling and remove service
                             if (this.pollingTimer) {
+                                this.log.warn(`Bad status from ${this.name} exceeded limit. Removing this sensor service.`);
                                 clearInterval(this.pollingTimer);
+                                this.pollingTimer = undefined;
+                                try {
+                                    this.accessory.removeService(this.service);
+                                }
+                                catch {
+                                    // already removed
+                                }
                             }
-                            this.accessory.removeService(this.service);
                         }
                         else {
-                            this.log.warn(`Bad status from ${this.name}.  Ignoring for now.`);
+                            this.log.debug(`Bad status from ${this.name}. Ignoring for now (${this.statusFailureCount}/5).`);
                         }
                         reject(new this.platform.api.hap.HapStatusError(-70410 /* this.platform.api.hap.HAPStatus.INVALID_VALUE_IN_REQUEST */));
                         return;

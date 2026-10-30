@@ -5,6 +5,7 @@ import axios, { AxiosInstance } from 'axios';
 //import { BasePlatformAccessory } from './basePlatformAccessory';
 import { MultiServiceAccessory } from './multiServiceAccessory';
 import { SubscriptionHandler } from './webhook/subscriptionHandler';
+import { sanitizeName } from './keyValues';
 
 /**
  * HomebridgePlatform
@@ -216,10 +217,11 @@ export class IKHomeBridgeHomebridgePlatform implements DynamicPlatformPlugin {
           // this.log.info('Removing existing accessory from cache:', existingAccessory.displayName);
         } else {
           // the accessory does not yet exist, so we need to create it
-          this.log.info('Registering new accessory: ' + device.label);
+          const cleanName = sanitizeName(device.label);
+          this.log.info('Registering new accessory: ' + cleanName);
 
           // create a new accessory
-          const accessory = new this.api.platformAccessory(device.label, device.deviceId);
+          const accessory = new this.api.platformAccessory(cleanName, device.deviceId);
 
           // store a copy of the device object in the `accessory.context`
           // the `context` property can be used to store any data about the accessory you may need

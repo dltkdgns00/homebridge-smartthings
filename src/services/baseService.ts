@@ -3,6 +3,7 @@ import { ShortEvent } from '../webhook/subscriptionHandler';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
 //import { BasePlatformAccessory } from '../basePlatformAccessory';
 import { IKHomeBridgeHomebridgePlatform } from '../platform';
+import { sanitizeName } from '../keyValues';
 
 export class BaseService {
   protected accessory: PlatformAccessory;
@@ -56,7 +57,7 @@ export class BaseService {
         this.accessory.addService(serviceType, `${serviceType.name}-${this.componentId}`, `${serviceType.name}-${this.componentId}`);
     }
 
-    this.service.setCharacteristic(this.platform.Characteristic.Name, this.accessory.context.device.label);
+    this.service.setCharacteristic(this.platform.Characteristic.Name, sanitizeName(this.accessory.context.device.label));
   }
 
   protected async getStatus(): Promise<boolean> {

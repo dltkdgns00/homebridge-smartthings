@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TelevisionService = void 0;
 const baseService_1 = require("./baseService");
+const keyValues_1 = require("../keyValues");
 class TelevisionService extends baseService_1.BaseService {
     speakerService;
     constructor(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus) {
@@ -12,7 +13,7 @@ class TelevisionService extends baseService_1.BaseService {
         }
         this.setServiceType(platform.Service.Television);
         this.log.debug(`Adding TelevisionService to ${this.name}`);
-        this.service.setCharacteristic(platform.Characteristic.ConfiguredName, this.name);
+        this.service.setCharacteristic(platform.Characteristic.ConfiguredName, (0, keyValues_1.sanitizeName)(this.name));
         this.service.setCharacteristic(platform.Characteristic.SleepDiscoveryMode, platform.Characteristic.SleepDiscoveryMode.ALWAYS_DISCOVERABLE);
         this.service.setCharacteristic(platform.Characteristic.ActiveIdentifier, 1);
         this.service.getCharacteristic(platform.Characteristic.Active)

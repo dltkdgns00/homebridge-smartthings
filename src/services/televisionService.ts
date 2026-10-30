@@ -3,6 +3,7 @@ import { IKHomeBridgeHomebridgePlatform } from '../platform';
 import { BaseService } from './baseService';
 import { MultiServiceAccessory } from '../multiServiceAccessory';
 import { ShortEvent } from '../webhook/subscriptionHandler';
+import { sanitizeName } from '../keyValues';
 
 export class TelevisionService extends BaseService {
   private speakerService: Service;
@@ -26,7 +27,7 @@ export class TelevisionService extends BaseService {
     this.setServiceType(platform.Service.Television);
     this.log.debug(`Adding TelevisionService to ${this.name}`);
 
-    this.service.setCharacteristic(platform.Characteristic.ConfiguredName, this.name);
+    this.service.setCharacteristic(platform.Characteristic.ConfiguredName, sanitizeName(this.name));
     this.service.setCharacteristic(
       platform.Characteristic.SleepDiscoveryMode,
       platform.Characteristic.SleepDiscoveryMode.ALWAYS_DISCOVERABLE,

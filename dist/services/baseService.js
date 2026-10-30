@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.BaseService = void 0;
+const keyValues_1 = require("../keyValues");
 class BaseService {
     accessory;
     log;
@@ -43,7 +44,7 @@ class BaseService {
             this.service = this.accessory.getService(`${serviceType.name}-${this.componentId}`) ||
                 this.accessory.addService(serviceType, `${serviceType.name}-${this.componentId}`, `${serviceType.name}-${this.componentId}`);
         }
-        this.service.setCharacteristic(this.platform.Characteristic.Name, this.accessory.context.device.label);
+        this.service.setCharacteristic(this.platform.Characteristic.Name, (0, keyValues_1.sanitizeName)(this.accessory.context.device.label));
     }
     async getStatus() {
         return new Promise((resolve) => {

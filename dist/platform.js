@@ -9,6 +9,7 @@ const axios_1 = __importDefault(require("axios"));
 //import { BasePlatformAccessory } from './basePlatformAccessory';
 const multiServiceAccessory_1 = require("./multiServiceAccessory");
 const subscriptionHandler_1 = require("./webhook/subscriptionHandler");
+const keyValues_1 = require("./keyValues");
 /**
  * HomebridgePlatform
  * This class is the main constructor for your plugin, this is where you should
@@ -191,9 +192,10 @@ class IKHomeBridgeHomebridgePlatform {
                 }
                 else {
                     // the accessory does not yet exist, so we need to create it
-                    this.log.info('Registering new accessory: ' + device.label);
+                    const cleanName = (0, keyValues_1.sanitizeName)(device.label);
+                    this.log.info('Registering new accessory: ' + cleanName);
                     // create a new accessory
-                    const accessory = new this.api.platformAccessory(device.label, device.deviceId);
+                    const accessory = new this.api.platformAccessory(cleanName, device.deviceId);
                     // store a copy of the device object in the `accessory.context`
                     // the `context` property can be used to store any data about the accessory you may need
                     accessory.context.device = device;
