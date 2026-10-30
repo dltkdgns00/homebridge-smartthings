@@ -5,5 +5,5 @@ export declare const PLATFORM_NAME = "HomeBridgeSmartThings";
 /**
  * This must match the name of your plugin as defined the package.json
  */
-export declare const PLUGIN_NAME = "homebridge-smartthings-ik";
+export declare const PLUGIN_NAME = "homebridge-smartthings-sl";
 //# sourceMappingURL=settings.d.ts.map
