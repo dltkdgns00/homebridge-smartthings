@@ -42,7 +42,7 @@ export declare class MultiServiceAccessory {
     protected lastStatusResult: boolean;
     get id(): string;
     constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory);
-    private static enqueueStatusRequest;
+    private static enqueueRequest;
     private registerServiceIfMatchesCapabilities;
     addComponent(componentId: string, capabilities: string[]): void;
     isOnline(): boolean;
@@ -52,7 +52,7 @@ export declare class MultiServiceAccessory {
     forceNextStatusRefresh(): void;
     startPollingState(pollSeconds: number, getValue: () => Promise<CharacteristicValue>, service: Service, chracteristic: WithUUID<new () => Characteristic>, targetStateCharacteristic?: WithUUID<new () => Characteristic>, getTargetState?: () => Promise<CharacteristicValue>): ReturnType<typeof setInterval> | void;
     sendCommand(capability: string, command: string, args?: unknown[]): Promise<boolean>;
-    sendCommands(commands: Command[]): Promise<boolean>;
+    sendCommands(commands: Command[], retryCount?: number): Promise<boolean>;
     private waitFor;
     processEvent(event: ShortEvent): void;
 }

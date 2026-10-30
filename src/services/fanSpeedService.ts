@@ -5,6 +5,8 @@ import { MultiServiceAccessory } from '../multiServiceAccessory';
 import { ShortEvent } from '../webhook/subscriptionHandler';
 
 export class FanSpeedService extends BaseService {
+  private setLevelDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+  private lastSentLevel: number | undefined;
 
   constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
     multiServiceAccessory: MultiServiceAccessory,
@@ -43,19 +45,38 @@ export class FanSpeedService extends BaseService {
       this.log.error(this.name + ' is offline');
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
-    this.multiServiceAccessory.sendCommand('switch', value ? 'on' : 'off').then((success) => {
+
+    const turnOn = Boolean(value);
+    if (!turnOn) {
+      if (this.setLevelDebounceTimer) {
+        clearTimeout(this.setLevelDebounceTimer);
+      }
+      this.lastSentLevel = 0;
+      const success = await this.multiServiceAccessory.sendCommand('switch', 'off');
       if (success) {
-        this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
+        this.log.debug('onSet(off) SUCCESSFUL for ' + this.name);
+        this.multiServiceAccessory.forceNextStatusRefresh();
       } else {
         this.log.error(`Command failed for ${this.name}`);
       }
-    });
+      return;
+    }
+
+    if (this.lastSentLevel && this.lastSentLevel > 0) {
+      return;
+    }
+
+    const success = await this.multiServiceAccessory.sendCommand('switch', 'on');
+    if (success) {
+      this.log.debug('onSet(on) SUCCESSFUL for ' + this.name);
+      this.multiServiceAccessory.forceNextStatusRefresh();
+    } else {
+      this.log.error(`Command failed for ${this.name}`);
+    }
   }
 
   // Get the current state of the lock
   async getSwitchState(): Promise<CharacteristicValue> {
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     this.log.debug('Received getSwitchState() event for ' + this.name);
 
     return new Promise((resolve, reject) => {
@@ -74,37 +95,47 @@ export class FanSpeedService extends BaseService {
   async setLevel(value: CharacteristicValue): Promise<void> {
     this.log.debug('Received setLevel(' + value + ') event for ' + this.name);
 
+    if (!this.multiServiceAccessory.isOnline()) {
+      this.log.error(this.accessory.context.device.label + ' is offline');
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
+
+    let level = 0;
+    // Level is 0 (off), 1 (low), 2 (medium), 3 (high)
+    if (value === 0) {
+      level = 0;
+    } else if (value as number <= 33) {
+      level = 1;
+    } else if (value as number <= 66) {
+      level = 2;
+    } else {
+      level = 3;
+    }
+
+    if (this.setLevelDebounceTimer) {
+      clearTimeout(this.setLevelDebounceTimer);
+    }
+
     return new Promise<void>((resolve, reject) => {
-      if (!this.multiServiceAccessory.isOnline()) {
-        this.log.error(this.accessory.context.device.label + ' is offline');
-        return reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-      }
+      this.setLevelDebounceTimer = setTimeout(async () => {
+        if (this.lastSentLevel === level) {
+          this.log.debug(`Level for ${this.name} already at ${level}, skipping duplicate command`);
+          resolve();
+          return;
+        }
 
-      let level = 0;
-
-      // Level is 0 (off), 1 (low), 2 (medium), 3 (high)
-      if (value === 0) {
-        level = 0;
-      } else if (value as number <= 33) {
-        level = 1;
-      } else if (value as number  <= 66) {
-        level = 2;
-      } else {
-        level = 3;
-      }
-
-      this.log.debug(`Setting value of ${this.name} to ${level}`);
-      this.multiServiceAccessory.sendCommand('fanSpeed', 'setFanSpeed', [level]).then(success => {
+        this.log.debug(`Setting value of ${this.name} to ${level}`);
+        this.lastSentLevel = level;
+        const success = await this.multiServiceAccessory.sendCommand('fanSpeed', 'setFanSpeed', [level]);
         if (success) {
           this.log.debug('setLevel(' + value + ') SUCCESSFUL for ' + this.name);
           this.multiServiceAccessory.forceNextStatusRefresh();
-          // this.deviceStatus.timestamp = 0;
           resolve();
         } else {
           this.log.error(`Failed to send setLevel command for ${this.name}`);
           reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
         }
-      });
+      }, 350);
     });
   }
 
@@ -126,6 +157,7 @@ export class FanSpeedService extends BaseService {
         if (this.deviceStatus?.status?.fanSpeed?.fanSpeed?.value !== undefined &&
             this.deviceStatus?.status?.fanSpeed?.fanSpeed?.value !== null) {
           level = this.deviceStatus.status.fanSpeed.fanSpeed.value;
+          this.lastSentLevel = level;
           const pct = this.mapLevelToPercent(level);
           this.log.debug('getLevel() SUCCESSFUL for ' + this.name + '. value = ' + pct);
           resolve(pct);
@@ -146,6 +178,7 @@ export class FanSpeedService extends BaseService {
 
       case 'fanSpeed': {
         this.log.debug(`Event updating fanSpeed capability for ${this.name} to ${event.value}`);
+        this.lastSentLevel = Number(event.value);
         this.service.updateCharacteristic(this.platform.Characteristic.RotationSpeed, this.mapLevelToPercent(event.value));
       }
     }

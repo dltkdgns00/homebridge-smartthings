@@ -3,6 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.FanSwitchLevelService = void 0;
 const baseService_1 = require("./baseService");
 class FanSwitchLevelService extends baseService_1.BaseService {
+    setLevelDebounceTimer;
+    lastSentLevel;
     constructor(platform, accessory, componentId, capabilitites, multiServiceAccessory, name, deviceStatus) {
         super(platform, accessory, componentId, capabilitites, multiServiceAccessory, name, deviceStatus);
         this.setServiceType(platform.Service.Fan);
@@ -30,19 +32,36 @@ class FanSwitchLevelService extends baseService_1.BaseService {
             this.log.error(this.name + ' is offline');
             throw new this.platform.api.hap.HapStatusError(-70402 /* this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE */);
         }
-        this.multiServiceAccessory.sendCommand('switch', value ? 'on' : 'off').then((success) => {
+        const turnOn = Boolean(value);
+        if (!turnOn) {
+            if (this.setLevelDebounceTimer) {
+                clearTimeout(this.setLevelDebounceTimer);
+            }
+            this.lastSentLevel = 0;
+            const success = await this.multiServiceAccessory.sendCommand('switch', 'off');
             if (success) {
-                this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
+                this.log.debug('onSet(off) SUCCESSFUL for ' + this.name);
+                this.multiServiceAccessory.forceNextStatusRefresh();
             }
             else {
                 this.log.error(`Command failed for ${this.name}`);
             }
-        });
+            return;
+        }
+        if (this.lastSentLevel && this.lastSentLevel > 0) {
+            return;
+        }
+        const success = await this.multiServiceAccessory.sendCommand('switch', 'on');
+        if (success) {
+            this.log.debug('onSet(on) SUCCESSFUL for ' + this.name);
+            this.multiServiceAccessory.forceNextStatusRefresh();
+        }
+        else {
+            this.log.error(`Command failed for ${this.name}`);
+        }
     }
     // Get the current state of the lock
     async getSwitchState() {
-        // if you need to return an error to show the device as "Not Responding" in the Home app:
-        // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
         this.log.debug('Received getSwitchState() event for ' + this.name);
         return new Promise((resolve, reject) => {
             this.getStatus().then(success => {
@@ -59,23 +78,34 @@ class FanSwitchLevelService extends baseService_1.BaseService {
     }
     async setLevel(value) {
         this.log.debug('Received setLevel(' + value + ') event for ' + this.name);
+        if (!this.multiServiceAccessory.isOnline()) {
+            this.log.error(this.accessory.context.device.label + ' is offline');
+            throw new this.platform.api.hap.HapStatusError(-70402 /* this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE */);
+        }
+        const targetLevel = Number(value);
+        if (this.setLevelDebounceTimer) {
+            clearTimeout(this.setLevelDebounceTimer);
+        }
         return new Promise((resolve, reject) => {
-            if (!this.multiServiceAccessory.isOnline()) {
-                this.log.error(this.accessory.context.device.label + ' is offline');
-                return reject(new this.platform.api.hap.HapStatusError(-70402 /* this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE */));
-            }
-            this.multiServiceAccessory.sendCommand('switchLevel', 'setLevel', [value]).then(success => {
+            this.setLevelDebounceTimer = setTimeout(async () => {
+                if (this.lastSentLevel === targetLevel) {
+                    this.log.debug(`Level for ${this.name} already at ${targetLevel}, skipping duplicate command`);
+                    resolve();
+                    return;
+                }
+                this.log.debug(`Setting switchLevel of ${this.name} to ${targetLevel}`);
+                this.lastSentLevel = targetLevel;
+                const success = await this.multiServiceAccessory.sendCommand('switchLevel', 'setLevel', [targetLevel]);
                 if (success) {
                     this.log.debug('setLevel(' + value + ') SUCCESSFUL for ' + this.name);
                     this.multiServiceAccessory.forceNextStatusRefresh();
-                    // this.deviceStatus.timestamp = 0;
                     resolve();
                 }
                 else {
                     this.log.error(`Failed to send setLevel command for ${this.name}`);
                     reject(new this.platform.api.hap.HapStatusError(-70402 /* this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE */));
                 }
-            });
+            }, 350);
         });
     }
     async getLevel() {
@@ -94,6 +124,7 @@ class FanSwitchLevelService extends baseService_1.BaseService {
                 if (this.deviceStatus?.status?.switchLevel?.level?.value !== undefined &&
                     this.deviceStatus?.status?.switchLevel?.level?.value !== null) {
                     level = this.deviceStatus.status.switchLevel.level.value;
+                    this.lastSentLevel = level;
                     this.log.debug('getLevel() SUCCESSFUL for ' + this.name + '. value = ' + level);
                     resolve(level);
                 }
@@ -112,6 +143,7 @@ class FanSwitchLevelService extends baseService_1.BaseService {
             }
             case 'switchLevel': {
                 this.log.debug(`Event updating switchLevel capability for ${this.name} to ${event.value}`);
+                this.lastSentLevel = Number(event.value);
                 this.service.updateCharacteristic(this.platform.Characteristic.RotationSpeed, event.value);
             }
         }

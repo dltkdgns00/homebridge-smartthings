@@ -204,7 +204,7 @@ class MultiServiceAccessory {
             .setCharacteristic(platform.Characteristic.Model, 'Default-Model')
             .setCharacteristic(platform.Characteristic.SerialNumber, 'Default-Serial');
     }
-    static enqueueStatusRequest(fn) {
+    static enqueueRequest(fn) {
         const next = MultiServiceAccessory.requestQueue.then(async () => {
             const waitMs = MultiServiceAccessory.rateLimitResetTime - Date.now();
             if (waitMs > 0) {
@@ -295,7 +295,7 @@ class MultiServiceAccessory {
                 this.log.debug(`Calling Smartthings to get an update for ${this.name}`);
                 this.statusQueryInProgress = true;
                 this.waitFor(() => this.commandInProgress === false).then(() => {
-                    MultiServiceAccessory.enqueueStatusRequest(() => this.axInstance.get(this.statusURL))
+                    MultiServiceAccessory.enqueueRequest(() => this.axInstance.get(this.statusURL))
                         .then((res) => {
                         const componentsStatus = res.data?.components || {};
                         this.failureCount = 0;
@@ -384,25 +384,43 @@ class MultiServiceAccessory {
         const cmd = new smartThingsCommand_1.Command(capability, command, args);
         return this.sendCommands([cmd]);
     }
-    async sendCommands(commands) {
+    async sendCommands(commands, retryCount = 0) {
         const commandBody = JSON.stringify({ commands: commands });
         return new Promise((resolve) => {
-            this.waitFor(() => !this.commandInProgress).then(() => {
+            this.waitFor(() => !this.commandInProgress).then(async () => {
                 this.commandInProgress = true;
-                this.axInstance
-                    .post(this.commandURL, commandBody)
-                    .then(() => {
+                try {
+                    await MultiServiceAccessory.enqueueRequest(() => this.axInstance.post(this.commandURL, commandBody));
                     this.log.debug(`${JSON.stringify(commands)} successful for ${this.name}`);
                     this.deviceStatusTimestamp = 0; // Force a refresh on next poll after a state change
                     this.lastCommandCompleted = Date.now();
                     this.commandInProgress = false;
                     resolve(true);
-                })
-                    .catch((error) => {
+                }
+                catch (error) {
                     this.commandInProgress = false;
+                    const statusCode = error?.response?.status;
+                    if (statusCode === 429) {
+                        const retryAfter = Number(error?.response?.headers?.['retry-after']) || 5;
+                        MultiServiceAccessory.rateLimitResetTime =
+                            Date.now() + retryAfter * 1000;
+                        this.log.warn(`SmartThings command rate limit (429) for ${this.name}. Backing off for ${retryAfter}s.`);
+                        if (retryCount < 2) {
+                            await new Promise((r) => setTimeout(r, retryAfter * 1000));
+                            const retrySuccess = await this.sendCommands(commands, retryCount + 1);
+                            resolve(retrySuccess);
+                            return;
+                        }
+                    }
+                    else if (statusCode === 409) {
+                        this.log.warn(`${JSON.stringify(commands)} conflict (409) for ${this.name}: device is likely already in target state`);
+                        this.deviceStatusTimestamp = 0;
+                        resolve(true);
+                        return;
+                    }
                     this.log.error(`${JSON.stringify(commands)} failed for ${this.name}: ${error}`);
                     resolve(false);
-                });
+                }
             });
         });
     }
