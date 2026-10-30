@@ -7,21 +7,40 @@
 
 [![verified-by-homebridge](https://badgen.net/badge/homebridge/verified/purple)](https://github.com/homebridge/homebridge/wiki/Verified-Plugins)
 
-# Smartthings Homebridge Plugin 
+# Smartthings Homebridge Plugin (SL Fork)
 
-This is a smartthings plugin for Homebridge.  This requires no access to the legacy smartthings app, and doesn't
-require a lot of work to install.  It will discover devices automatically as well as unregister devices that are removed
-from your smarttthings network.  This is currently under development.
+> [!WARNING]
+> ### ⚠️ 주의 / Notice: 개인화 커스텀 버전 (Personal Fork)
+>
+> 본 플러그인(`homebridge-smartthings-sl`)은 원작자 [homebridge-smartthings-ik](https://github.com/iklein99/homebridge-smartthings)를 기반으로 **작성자 개인의 스마트홈 환경에 맞추어 커스텀 및 수정된 개인화 포크(Personal Fork) 버전**입니다.
+>
+> 한국 아파트 월패드 연동 기기(바닥난방/각방 온도조절기, 천장 환기장치), 삼성 비스포크 가전(에어컨, 로봇청소기, 스마트 TV, 영하 냉동고 등)과 특정 사용 패턴에 맞게 특화된 제어 로직(슬라이더 디바운스, API 속도 제한/429 방어, 영하 온도 범위 등)이 적용되어 있습니다.
+>
+> 따라서 **다른 사용자의 스마트싱스 환경에서는 범용적으로 정상 작동하지 않거나 의도치 않은 동작이 발생할 수 있습니다.**  
+> 표준적이고 범용적인 기능을 원하시는 분은 원작자의 오리지널 플러그인인 **[homebridge-smartthings-ik](https://github.com/iklein99/homebridge-smartthings)**를 사용해 주시기 바랍니다.
+>
+> ---
+>
+> *This plugin (`homebridge-smartthings-sl`) is a **personal customized fork** of [homebridge-smartthings-ik](https://github.com/iklein99/homebridge-smartthings), specifically modified for the author's personal smart home setup (Korean apartment wallpad heating/ventilation systems, Samsung Bespoke appliances, custom throttling/debounce, etc.).*  
+> *It **may not work universally or as expected** in different SmartThings environments. For standard and general-purpose use, please install and use the original plugin: **[homebridge-smartthings-ik](https://github.com/iklein99/homebridge-smartthings)**.*
+
+This is a smartthings plugin for Homebridge. This requires no access to the legacy smartthings app, and doesn't
+require a lot of work to install. It will discover devices automatically as well as unregister devices that are removed
+from your smartthings network.
 
 ## New in version 1.6.0 (Maintained by SangHoon Lee)
-* Added support for Samsung Robot Vacuums (Jet Bot and standard robot cleaners) with clean/dock switch and battery status.
-* Added support for Samsung Smart TVs (Television service with Apple TV remote widget, volume control, and input selection).
-* Added global API request throttling and 429 Too Many Requests backoff protection.
-* Fixed persistent offline bug caused by premature /health checks.
-* Fixed missing return in getStatus() that caused offline devices to trigger excessive API requests.
-* Fixed AirConditionerService cache busting bug and guarded against null/undefined status values.
-* Improved Korean floor heating (ThermostatService) support (mode, switch, and expanded 5~40°C temperature range).
-* Modernized TypeScript/ES6 imports, updated dependencies, and improved Homebridge v2 and Node 22/26 compatibility.
+* **Personalized Enhancements & Stability Fixes**:
+  * Added support for Samsung Robot Vacuums (Jet Bot and standard robot cleaners) with clean/dock switch and battery status.
+  * Added support for Samsung Smart TVs (Television service with Apple TV remote widget, volume control, and input selection; 409 conflict handled gracefully).
+  * Korean floor heating (ThermostatService) support (mode, switch, and expanded 5~40°C temperature range).
+  * Ceiling ventilation / Fan speed slider debounce (350ms) to prevent HomeKit drag 429 Too Many Requests spam.
+  * Extended sub-zero temperature support (-50°C ~ 100°C) for Bespoke freezers and sub-zero sensors.
+  * Global API request throttling queue (120ms rate-limit) and automatic 429 backoff protection.
+  * Fixed persistent offline bug caused by premature /health checks.
+  * Fixed missing return in `getStatus()` that caused offline devices to trigger excessive API requests.
+  * Fixed AirConditionerService cache busting bug and guarded against null/undefined status values.
+  * Homebridge v2 name characteristic compliance (auto-sanitized bracket symbols in names).
+  * Modernized TypeScript/ES6 imports, updated dependencies, and improved Homebridge v2 and Node 22/26 compatibility.
 
 ## Fixed in version 1.5.20
 * Fixed discovery of devices issue where some fans were set up as lights
