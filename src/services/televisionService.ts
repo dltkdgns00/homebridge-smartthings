@@ -7,6 +7,7 @@ import { sanitizeName } from '../keyValues';
 
 export class TelevisionService extends BaseService {
   private speakerService: Service;
+  private currentInputId = 1;
 
   constructor(
     platform: IKHomeBridgeHomebridgePlatform,
@@ -32,27 +33,22 @@ export class TelevisionService extends BaseService {
       platform.Characteristic.SleepDiscoveryMode,
       platform.Characteristic.SleepDiscoveryMode.ALWAYS_DISCOVERABLE,
     );
-    this.service.setCharacteristic(platform.Characteristic.ActiveIdentifier, 1);
 
     this.service.getCharacteristic(platform.Characteristic.Active)
       .onGet(this.getActive.bind(this))
       .onSet(this.setActive.bind(this));
 
     this.service.getCharacteristic(platform.Characteristic.ActiveIdentifier)
-      .onGet(() => 1)
-      .onSet((value: CharacteristicValue) => {
-        this.log.debug(`Set ActiveIdentifier to ${value} for ${this.name}`);
-      });
+      .onGet(() => this.currentInputId)
+      .onSet(this.setActiveIdentifier.bind(this));
 
     this.service.getCharacteristic(platform.Characteristic.RemoteKey)
       .onSet(this.setRemoteKey.bind(this));
 
     // Setup TelevisionSpeaker service for volume and mute control
-    const speakerName = `${this.name} Speaker`;
     this.speakerService = this.accessory.getService(platform.Service.TelevisionSpeaker) ||
-      this.accessory.addService(platform.Service.TelevisionSpeaker, speakerName, `tv-speaker-${this.componentId}`);
+      this.accessory.addService(platform.Service.TelevisionSpeaker, `${this.name} Speaker`, `tv-speaker-${this.componentId}`);
 
-    this.speakerService.setCharacteristic(platform.Characteristic.Active, platform.Characteristic.Active.ACTIVE);
     this.speakerService.setCharacteristic(
       platform.Characteristic.VolumeControlType,
       platform.Characteristic.VolumeControlType.ABSOLUTE,
@@ -75,17 +71,26 @@ export class TelevisionService extends BaseService {
 
     this.service.addLinkedService(this.speakerService);
 
-    // Setup required InputSource service per HomeKit Television spec
-    const inputSource = this.accessory.getService(platform.Service.InputSource) ||
-      this.accessory.addService(platform.Service.InputSource, 'TV Input', `tv-input-${this.componentId}`);
-
-    inputSource.setCharacteristic(platform.Characteristic.Identifier, 1)
-      .setCharacteristic(platform.Characteristic.ConfiguredName, 'TV')
+    // 실제 삼성 TV 입력 소스 등록: TV 및 HDMI1 (OllehTV 등 셋톱박스)
+    const input1 = this.accessory.getService('input-source-1') ||
+      this.accessory.addService(platform.Service.InputSource, 'HDMI 1 (셋톱박스)', 'input-source-1');
+    input1.setCharacteristic(platform.Characteristic.Identifier, 1)
+      .setCharacteristic(platform.Characteristic.ConfiguredName, 'HDMI 1 (셋톱박스)')
       .setCharacteristic(platform.Characteristic.IsConfigured, platform.Characteristic.IsConfigured.CONFIGURED)
       .setCharacteristic(platform.Characteristic.InputSourceType, platform.Characteristic.InputSourceType.HDMI)
       .setCharacteristic(platform.Characteristic.CurrentVisibilityState, platform.Characteristic.CurrentVisibilityState.SHOWN);
+    this.service.addLinkedService(input1);
 
-    this.service.addLinkedService(inputSource);
+    const input2 = this.accessory.getService('input-source-2') ||
+      this.accessory.addService(platform.Service.InputSource, '실시간 TV', 'input-source-2');
+    input2.setCharacteristic(platform.Characteristic.Identifier, 2)
+      .setCharacteristic(platform.Characteristic.ConfiguredName, '실시간 TV')
+      .setCharacteristic(platform.Characteristic.IsConfigured, platform.Characteristic.IsConfigured.CONFIGURED)
+      .setCharacteristic(platform.Characteristic.InputSourceType, platform.Characteristic.InputSourceType.TUNER)
+      .setCharacteristic(platform.Characteristic.CurrentVisibilityState, platform.Characteristic.CurrentVisibilityState.SHOWN);
+    this.service.addLinkedService(input2);
+
+    this.service.setCharacteristic(platform.Characteristic.ActiveIdentifier, 1);
 
     let pollSeconds = 10;
     if (this.platform.config.PollSwitchesAndLightsSeconds !== undefined) {
@@ -135,6 +140,20 @@ export class TelevisionService extends BaseService {
     }
   }
 
+  async setActiveIdentifier(value: CharacteristicValue): Promise<void> {
+    const id = Number(value);
+    this.currentInputId = id;
+    this.log.debug(`Received setActiveIdentifier(${id}) for TV ${this.name}`);
+
+    const targetSource = id === 1 ? 'HDMI1' : 'dtv';
+    // samsungvd.mediaInputSource 또는 mediaInputSource로 입력 전환 명령 전송
+    const cap = this.hasCapability('samsungvd.mediaInputSource') ? 'samsungvd.mediaInputSource' : 'mediaInputSource';
+    const success = await this.multiServiceAccessory.sendCommand(cap, 'setInputSource', [targetSource]);
+    if (success) {
+      this.multiServiceAccessory.forceNextStatusRefresh();
+    }
+  }
+
   async getVolume(): Promise<CharacteristicValue> {
     const success = await this.getStatus();
     if (!success) {
@@ -176,6 +195,17 @@ export class TelevisionService extends BaseService {
     this.log.debug(`Received RemoteKey(${value}) for TV ${this.name}`);
 
     switch (value) {
+      case RemoteKey.SELECT:
+      case RemoteKey.PLAY_PAUSE:
+        if (this.hasCapability('mediaPlayback')) {
+          await this.multiServiceAccessory.sendCommand('mediaPlayback', 'play');
+        }
+        break;
+      case RemoteKey.BACK:
+      case RemoteKey.EXIT:
+        // 뒤로가기 키 지원
+        this.log.debug(`Back key pressed for TV ${this.name}`);
+        break;
       case RemoteKey.ARROW_UP:
         if (this.hasCapability('tvChannel')) {
           await this.multiServiceAccessory.sendCommand('tvChannel', 'channelUp');
@@ -198,11 +228,6 @@ export class TelevisionService extends BaseService {
       case RemoteKey.ARROW_RIGHT:
         if (this.hasCapability('audioVolume')) {
           await this.multiServiceAccessory.sendCommand('audioVolume', 'volumeUp');
-        }
-        break;
-      case RemoteKey.PLAY_PAUSE:
-        if (this.hasCapability('mediaPlayback')) {
-          await this.multiServiceAccessory.sendCommand('mediaPlayback', 'play');
         }
         break;
       default:
