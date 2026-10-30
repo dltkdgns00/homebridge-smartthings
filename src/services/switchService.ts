@@ -6,14 +6,40 @@ import { ShortEvent } from '../webhook/subscriptionHandler';
 
 export class SwitchService extends BaseService {
 
-  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities:string[],
+  constructor(platform: IKHomeBridgeHomebridgePlatform, accessory: PlatformAccessory, componentId: string, capabilities: string[],
     multiServiceAccessory: MultiServiceAccessory,
     name: string, deviceStatus) {
     super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
-    this.setServiceType(platform.Service.Switch);
-    // Set the event handlers
-    this.log.debug(`Adding SwitchService to ${this.name}`);
+    // 한국 아파트 네이밍 규칙에 맞춰 조명 / 콘센트(대기전력) / 일반 스위치 카테고리 자동 분류
+    const lowerName = (this.name || '').toLowerCase();
+    if (lowerName.includes('조명') || lowerName.includes('light')) {
+      const oldSwitch = this.accessory.getService(platform.Service.Switch);
+      if (oldSwitch) {
+        this.accessory.removeService(oldSwitch);
+      }
+      const oldOutlet = this.accessory.getService(platform.Service.Outlet);
+      if (oldOutlet) {
+        this.accessory.removeService(oldOutlet);
+      }
+      this.setServiceType(platform.Service.Lightbulb);
+      this.log.debug(`Adding Lightbulb (SwitchService) to ${this.name}`);
+    } else if (lowerName.includes('대기전력') || lowerName.includes('콘센트') || lowerName.includes('플러그') || lowerName.includes('outlet')) {
+      const oldSwitch = this.accessory.getService(platform.Service.Switch);
+      if (oldSwitch) {
+        this.accessory.removeService(oldSwitch);
+      }
+      const oldLight = this.accessory.getService(platform.Service.Lightbulb);
+      if (oldLight) {
+        this.accessory.removeService(oldLight);
+      }
+      this.setServiceType(platform.Service.Outlet);
+      this.log.debug(`Adding Outlet (SwitchService) to ${this.name}`);
+    } else {
+      this.setServiceType(platform.Service.Switch);
+      this.log.debug(`Adding SwitchService to ${this.name}`);
+    }
+
     this.service.getCharacteristic(platform.Characteristic.On)
       .onGet(this.getSwitchState.bind(this))
       .onSet(this.setSwitchState.bind(this));
@@ -29,7 +55,6 @@ export class SwitchService extends BaseService {
     }
   }
 
-  // Set the target state of the lock
   async setSwitchState(value: CharacteristicValue) {
     this.log.debug('Received setSwitchState(' + value + ') event for ' + this.name);
 
@@ -41,35 +66,23 @@ export class SwitchService extends BaseService {
       if (success) {
         this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
         this.multiServiceAccessory.forceNextStatusRefresh();
-        // this.deviceStatus.timestamp = 0;  // Force a refresh next query.
       } else {
         this.log.error(`Command failed for ${this.name}`);
       }
     });
   }
 
-  // Get the current state of the lock
   async getSwitchState(): Promise<CharacteristicValue> {
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     this.log.debug('Received getSwitchState() event for ' + this.name);
 
-    return new Promise((resolve, reject) => {
-      this.getStatus().then(success => {
-        if (success) {
-          let switchState;
-          try {
-            switchState = this.deviceStatus.status.switch.switch.value;
-          } catch(error) {
-            this.log.error(`Missing switch status from ${this.name}`);
-          }
-          this.log.debug(`Switch value from ${this.name}: ${switchState}`);
-          resolve(switchState === 'on');
-        } else {
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-        }
-      });
-    });
+    const success = await this.getStatus();
+    if (!success) {
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
+
+    const switchState = this.deviceStatus?.status?.switch?.switch?.value;
+    this.log.debug(`Switch value from ${this.name}: ${switchState}`);
+    return switchState === 'on';
   }
 
   public processEvent(event: ShortEvent): void {

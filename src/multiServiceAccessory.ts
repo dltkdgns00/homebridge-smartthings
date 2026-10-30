@@ -162,6 +162,16 @@ export class MultiServiceAccessory {
       service: ThermostatService,
     },
     {
+      capabilities: ['temperatureMeasurement', 'thermostatCoolingSetpoint'],
+      optionalCapabilities: [
+        'thermostatMode',
+        'thermostatHeatingSetpoint',
+        'thermostatOperatingState',
+        'switch',
+      ],
+      service: ThermostatService,
+    },
+    {
       capabilities: ['windowShade', 'windowShadeLevel'],
       service: WindowCoveringService,
     },
@@ -191,6 +201,7 @@ export class MultiServiceAccessory {
   protected lastCommandCompleted = 0;
 
   protected statusQueryInProgress = false;
+  protected statusQueryPromise: Promise<boolean> | null = null;
   protected lastStatusResult = true;
 
   get id() {
@@ -323,6 +334,9 @@ export class MultiServiceAccessory {
         service,
       );
     });
+
+    // 부팅 직후 백그라운드에서 초기 상태를 미리 캐싱하여 홈 앱 첫 진입 시 딜레이 방지
+    this.fetchStatusFromApi().catch(() => undefined);
   }
 
   public isOnline(): boolean {
@@ -362,99 +376,110 @@ export class MultiServiceAccessory {
     );
   }
 
-  // Called by subclasses to refresh the status for the device.
-  async refreshStatus(): Promise<boolean> {
-    return new Promise((resolve) => {
+  private fetchStatusFromApi(): Promise<boolean> {
+    if (this.statusQueryPromise) {
+      return this.statusQueryPromise;
+    }
+
+    if (
+      Date.now() < MultiServiceAccessory.rateLimitResetTime &&
+      this.hasCachedStatus()
+    ) {
       this.log.debug(
-        `Refreshing status for ${this.name} - current timestamp is ${this.deviceStatusTimestamp}`,
+        `Rate limit cooldown active, reusing cached status for ${this.name}`,
       );
-      if (Date.now() - this.deviceStatusTimestamp > 8000) {
-        // If there is already a call to smartthings to update status for this device, don't issue another one until
-        // we return from that.
-        if (this.statusQueryInProgress) {
-          this.log.debug(
-            `Status query already in progress for ${this.name}. Waiting...`,
-          );
-          this.waitFor(() => !this.statusQueryInProgress).then(() =>
-            resolve(this.lastStatusResult),
-          );
-          return;
-        }
+      return Promise.resolve(true);
+    }
 
-        // If global rate limit cooldown is active and we already have cached status, reuse it to avoid 429 errors
-        if (
-          Date.now() < MultiServiceAccessory.rateLimitResetTime &&
-          this.hasCachedStatus()
-        ) {
-          this.log.debug(
-            `Rate limit cooldown active, reusing cached status for ${this.name}`,
-          );
-          resolve(true);
-          return;
-        }
-
-        this.log.debug(`Calling Smartthings to get an update for ${this.name}`);
-        this.statusQueryInProgress = true;
-        this.waitFor(() => this.commandInProgress === false).then(() => {
-          MultiServiceAccessory.enqueueRequest(() =>
-            this.axInstance.get(this.statusURL),
-          )
-            .then((res) => {
-              const componentsStatus = res.data?.components || {};
-              this.failureCount = 0;
-              this.online = true;
-              this.giveUpTime = 0;
-              this.lastStatusResult = true;
-              this.deviceStatusTimestamp = Date.now();
-              this.components.forEach((component) => {
-                if (componentsStatus[component.componentId] !== undefined) {
-                  component.status = componentsStatus[component.componentId];
-                  this.log.debug(
-                    `Updated status for ${this.name}-${component.componentId}: ${JSON.stringify(component.status)}`,
-                  );
-                } else {
-                  this.log.error(
-                    `Failed to get status for ${this.name}-${component.componentId}`,
-                  );
-                }
-              });
-              this.statusQueryInProgress = false;
-              resolve(true);
-            })
-            .catch((error) => {
-              const statusCode = error?.response?.status;
-              if (statusCode === 429) {
-                const retryAfter =
-                  Number(error?.response?.headers?.['retry-after']) || 15;
-                MultiServiceAccessory.rateLimitResetTime =
-                  Date.now() + retryAfter * 1000;
-                this.log.warn(
-                  `SmartThings API rate limit (429) hit while querying ${this.name}. Backing off for ${retryAfter}s.`,
-                );
-                this.statusQueryInProgress = false;
-                resolve((this.lastStatusResult = this.hasCachedStatus()));
-                return;
-              }
-
-              this.failureCount++;
-              this.log.error(
-                `Failed to request status from ${this.name}: ${error}. This is failure number ${this.failureCount}`,
-              );
-              if (this.failureCount >= 5) {
-                this.log.error(
-                  `Exceeded allowed failures for ${this.name}. Device is offline (will retry in 5 minutes)`,
-                );
-                this.giveUpTime = Date.now();
-                this.online = false;
-              }
-              this.statusQueryInProgress = false;
-              resolve((this.lastStatusResult = false));
-            });
+    this.log.debug(`Calling Smartthings to get an update for ${this.name}`);
+    this.statusQueryInProgress = true;
+    this.statusQueryPromise = this.waitFor(() => this.commandInProgress === false)
+      .then(() =>
+        MultiServiceAccessory.enqueueRequest(() =>
+          this.axInstance.get(this.statusURL),
+        ),
+      )
+      .then((res) => {
+        const componentsStatus = res.data?.components || {};
+        this.failureCount = 0;
+        this.online = true;
+        this.giveUpTime = 0;
+        this.lastStatusResult = true;
+        this.deviceStatusTimestamp = Date.now();
+        this.components.forEach((component) => {
+          if (componentsStatus[component.componentId] !== undefined) {
+            component.status = componentsStatus[component.componentId];
+            this.log.debug(
+              `Updated status for ${this.name}-${component.componentId}: ${JSON.stringify(component.status)}`,
+            );
+          } else {
+            this.log.error(
+              `Failed to get status for ${this.name}-${component.componentId}`,
+            );
+          }
         });
-      } else {
-        resolve(true);
-      }
-    });
+        this.statusQueryInProgress = false;
+        this.statusQueryPromise = null;
+        return true;
+      })
+      .catch((error) => {
+        const statusCode = error?.response?.status;
+        if (statusCode === 429) {
+          const retryAfter =
+            Number(error?.response?.headers?.['retry-after']) || 15;
+          MultiServiceAccessory.rateLimitResetTime =
+            Date.now() + retryAfter * 1000;
+          this.log.warn(
+            `SmartThings API rate limit (429) hit while querying ${this.name}. Backing off for ${retryAfter}s.`,
+          );
+          this.statusQueryInProgress = false;
+          this.statusQueryPromise = null;
+          return (this.lastStatusResult = this.hasCachedStatus());
+        }
+
+        this.failureCount++;
+        this.log.error(
+          `Failed to request status from ${this.name}: ${error}. This is failure number ${this.failureCount}`,
+        );
+        if (this.failureCount >= 5) {
+          this.log.error(
+            `Exceeded allowed failures for ${this.name}. Device is offline (will retry in 5 minutes)`,
+          );
+          this.giveUpTime = Date.now();
+          this.online = false;
+        }
+        this.statusQueryInProgress = false;
+        this.statusQueryPromise = null;
+        return (this.lastStatusResult = this.hasCachedStatus());
+      });
+
+    return this.statusQueryPromise;
+  }
+
+  // Called by subclasses to refresh the status for the device (Stale-While-Revalidate).
+  async refreshStatus(): Promise<boolean> {
+    this.log.debug(
+      `Refreshing status for ${this.name} - current timestamp is ${this.deviceStatusTimestamp}`,
+    );
+
+    const isStale = Date.now() - this.deviceStatusTimestamp > 8000;
+
+    if (!isStale && this.hasCachedStatus()) {
+      return true;
+    }
+
+    // 이미 캐시된 상태가 있다면 onGet을 블로킹하지 않고 즉시 캐시 반환 후 백그라운드 갱신 (0ms 응답)
+    if (this.hasCachedStatus()) {
+      this.fetchStatusFromApi().catch(() => undefined);
+      return true;
+    }
+
+    // 부팅 직후 아직 첫 캐시가 없는 경우, Homebridge slow warning(2초)을 피하기 위해 최대 1.2초까지만 대기
+    const fetchPromise = this.fetchStatusFromApi();
+    const timeoutPromise = new Promise<boolean>((resolve) =>
+      setTimeout(() => resolve(true), 1200),
+    );
+    return Promise.race([fetchPromise, timeoutPromise]);
   }
 
   public forceNextStatusRefresh() {

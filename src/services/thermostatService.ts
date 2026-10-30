@@ -10,6 +10,8 @@ export class ThermostatService extends BaseService {
   units = 'C';
   supportsOperatingState = false;
   supportsCooling = false;
+  supportsHeating = false;
+  private targetTempDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     platform: IKHomeBridgeHomebridgePlatform,
@@ -22,9 +24,14 @@ export class ThermostatService extends BaseService {
   ) {
     super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
+    // 이전 단일 서비스로 등록되었던 잔재 서비스(스위치, 온도센서 등) 정리
     const existingSwitch = this.accessory.getService(platform.Service.Switch);
     if (existingSwitch) {
       this.accessory.removeService(existingSwitch);
+    }
+    const existingTemp = this.accessory.getService(platform.Service.TemperatureSensor);
+    if (existingTemp) {
+      this.accessory.removeService(existingTemp);
     }
 
     this.setServiceType(platform.Service.Thermostat);
@@ -35,6 +42,7 @@ export class ThermostatService extends BaseService {
       this.supportsOperatingState = true;
     }
     this.supportsCooling = this.capabilities.includes('thermostatCoolingSetpoint');
+    this.supportsHeating = this.capabilities.includes('thermostatHeatingSetpoint');
 
     const TargetState = platform.Characteristic.TargetHeatingCoolingState;
     const CurrentState = platform.Characteristic.CurrentHeatingCoolingState;
@@ -46,13 +54,33 @@ export class ThermostatService extends BaseService {
       .onGet(this.getTargetHeatingCoolingState.bind(this))
       .onSet(this.setTargetHeatingCoolingState.bind(this));
 
-    if (!this.supportsCooling) {
+    // 기기 능력에 따라 유효 모드 설정 (냉방 전용 / 난방 전용 / 복합)
+    if (this.supportsCooling && !this.supportsHeating) {
+      targetStateChar.setProps({
+        validValues: [
+          TargetState.OFF,
+          TargetState.COOL,
+        ],
+      });
+      this.targetHeatingCoolingState = TargetState.OFF;
+    } else if (this.supportsHeating && !this.supportsCooling) {
       targetStateChar.setProps({
         validValues: [
           TargetState.OFF,
           TargetState.HEAT,
         ],
       });
+      this.targetHeatingCoolingState = TargetState.OFF;
+    } else {
+      targetStateChar.setProps({
+        validValues: [
+          TargetState.OFF,
+          TargetState.HEAT,
+          TargetState.COOL,
+          TargetState.AUTO,
+        ],
+      });
+      this.targetHeatingCoolingState = TargetState.OFF;
     }
 
     this.service.getCharacteristic(platform.Characteristic.CurrentTemperature)
@@ -68,7 +96,6 @@ export class ThermostatService extends BaseService {
       .onGet(this.getTemperatureDisplayUnits.bind(this))
       .onSet(this.setTemperatureDisplayUnits.bind(this));
 
-    this.targetHeatingCoolingState = TargetState.OFF;
     this.targetTemperature = 20;
 
     let pollSensors = 10;
@@ -123,7 +150,7 @@ export class ThermostatService extends BaseService {
       }
       switch (String(state).toLowerCase()) {
         case 'cool':
-          this.targetHeatingCoolingState = this.supportsCooling ? TargetState.COOL : TargetState.HEAT;
+          this.targetHeatingCoolingState = TargetState.COOL;
           break;
         case 'heat':
         case 'emergency heat':
@@ -132,7 +159,7 @@ export class ThermostatService extends BaseService {
           this.targetHeatingCoolingState = TargetState.HEAT;
           break;
         case 'auto':
-          this.targetHeatingCoolingState = this.supportsCooling ? TargetState.AUTO : TargetState.HEAT;
+          this.targetHeatingCoolingState = this.supportsCooling && !this.supportsHeating ? TargetState.COOL : TargetState.HEAT;
           break;
         default:
           this.targetHeatingCoolingState = TargetState.OFF;
@@ -143,11 +170,14 @@ export class ThermostatService extends BaseService {
 
     if (this.hasCapability('switch')) {
       const sw = status.switch?.switch?.value;
-      this.targetHeatingCoolingState = sw === 'on' ? TargetState.HEAT : TargetState.OFF;
+      if (sw === 'on') {
+        this.targetHeatingCoolingState = this.supportsCooling && !this.supportsHeating ? TargetState.COOL : TargetState.HEAT;
+      } else {
+        this.targetHeatingCoolingState = TargetState.OFF;
+      }
       return this.targetHeatingCoolingState;
     }
 
-    this.targetHeatingCoolingState = this.supportsCooling ? TargetState.AUTO : TargetState.HEAT;
     return this.targetHeatingCoolingState;
   }
 
@@ -180,7 +210,12 @@ export class ThermostatService extends BaseService {
           break;
       }
 
-      const success = await this.multiServiceAccessory.sendCommand('thermostatMode', cmd);
+      // 표준 setThermostatMode 명령 먼저 시도, 실패 시 직접 명령 fallback
+      let success = await this.multiServiceAccessory.sendCommand('thermostatMode', 'setThermostatMode', [cmd]);
+      if (!success) {
+        success = await this.multiServiceAccessory.sendCommand('thermostatMode', cmd);
+      }
+
       if (success) {
         this.log.debug('setTargetHeatingCoolingState(' + value + ') SUCCESSFUL for ' + this.name);
         this.multiServiceAccessory.forceNextStatusRefresh();
@@ -228,10 +263,11 @@ export class ThermostatService extends BaseService {
           return CurrentState.COOL;
         case 'heat':
         case 'emergency heat':
-        case 'auto':
         case 'on':
         case 'eco':
           return CurrentState.HEAT;
+        case 'auto':
+          return this.supportsCooling && !this.supportsHeating ? CurrentState.COOL : CurrentState.HEAT;
         default:
           return CurrentState.OFF;
       }
@@ -239,7 +275,10 @@ export class ThermostatService extends BaseService {
 
     if (this.hasCapability('switch')) {
       const sw = status.switch?.switch?.value;
-      return sw === 'on' ? CurrentState.HEAT : CurrentState.OFF;
+      if (sw === 'on') {
+        return this.supportsCooling && !this.supportsHeating ? CurrentState.COOL : CurrentState.HEAT;
+      }
+      return CurrentState.OFF;
     }
 
     if (this.supportsOperatingState) {
@@ -295,7 +334,7 @@ export class ThermostatService extends BaseService {
     const targetMode = await this.getTargetHeatingCoolingState();
 
     let temp: number | undefined;
-    if (this.supportsCooling && targetMode === TargetState.COOL) {
+    if (this.supportsCooling && (!this.supportsHeating || targetMode === TargetState.COOL)) {
       temp = this.deviceStatus.status.thermostatCoolingSetpoint?.coolingSetpoint?.value;
     } else {
       temp = this.deviceStatus.status.thermostatHeatingSetpoint?.heatingSetpoint?.value;
@@ -322,17 +361,34 @@ export class ThermostatService extends BaseService {
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
 
-    this.targetTemperature = value as number;
-    let capability = 'thermostatHeatingSetpoint';
-    let command = 'setHeatingSetpoint';
+    this.targetTemperature = Number(value);
 
-    if (this.supportsCooling && this.targetHeatingCoolingState === this.platform.Characteristic.TargetHeatingCoolingState.COOL) {
-      capability = 'thermostatCoolingSetpoint';
-      command = 'setCoolingSetpoint';
+    // 슬라이더 조작 시 350ms 디바운스 적용 (연속 API 호출 및 429 방지)
+    if (this.targetTempDebounceTimer) {
+      clearTimeout(this.targetTempDebounceTimer);
     }
 
-    const convertedTemp = this.units === 'F' ? ((value as number) * (9 / 5)) + 32 : value;
-    await this.multiServiceAccessory.sendCommand(capability, command, [convertedTemp]);
+    this.targetTempDebounceTimer = setTimeout(async () => {
+      this.targetTempDebounceTimer = null;
+      if (!this.multiServiceAccessory.isOnline()) {
+        return;
+      }
+
+      let capability = 'thermostatHeatingSetpoint';
+      let command = 'setHeatingSetpoint';
+
+      if (this.supportsCooling && (!this.supportsHeating || this.targetHeatingCoolingState === this.platform.Characteristic.TargetHeatingCoolingState.COOL)) {
+        capability = 'thermostatCoolingSetpoint';
+        command = 'setCoolingSetpoint';
+      }
+
+      // 한국형 아파트 월패드 및 에어컨은 정수(1도 단위)로 전달하는 것이 가장 안전
+      const rounded = Math.round(this.targetTemperature);
+      const convertedTemp = this.units === 'F' ? Math.round((rounded * (9 / 5)) + 32) : rounded;
+
+      this.log.debug(`Sending ${command}(${convertedTemp}) for ${this.name}`);
+      await this.multiServiceAccessory.sendCommand(capability, command, [convertedTemp]);
+    }, 350);
   }
 
   // DISPLAY UNITS

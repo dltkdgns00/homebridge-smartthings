@@ -12,35 +12,58 @@ export class ValveService extends BaseService {
     super(platform, accessory, componentId, capabilities, multiServiceAccessory, name, deviceStatus);
 
     this.setServiceType(platform.Service.Valve);
-    // Set the event handlers
     this.log.debug(`Adding ValveService to ${this.name}`);
-    this.service.getCharacteristic(platform.Characteristic.Active)  // Always return true for active
+
+    this.service.getCharacteristic(platform.Characteristic.Active)
       .onGet(this.getValveState.bind(this))
       .onSet(this.setValveState.bind(this));
-    this.service.getCharacteristic(platform.Characteristic.ValveType).onGet(() => platform.Characteristic.ValveType.IRRIGATION);
+
+    this.service.getCharacteristic(platform.Characteristic.ValveType)
+      .onGet(() => platform.Characteristic.ValveType.GENERIC_VALVE);
+
     this.service.getCharacteristic(platform.Characteristic.InUse)
-      .onGet(this.getValveState.bind(this));
+      .onGet(this.getValveInUse.bind(this));
+
+    let pollSeconds = 10;
+    if (this.platform.config.PollSwitchesAndLightsSeconds !== undefined) {
+      pollSeconds = this.platform.config.PollSwitchesAndLightsSeconds;
+    }
+
+    if (pollSeconds > 0) {
+      multiServiceAccessory.startPollingState(
+        pollSeconds,
+        this.getValveState.bind(this),
+        this.service,
+        platform.Characteristic.Active,
+        platform.Characteristic.InUse,
+        this.getValveInUse.bind(this),
+      );
+    }
   }
 
-  // Return the current target state
-  async getValveState(): Promise<number> {
-    // If it has been more than 10 seconds since we've sent a transition command,
-    // reset the target state to the current state.
-
-    return new Promise((resolve, reject) => {
-      this.getStatus().then(success => {
-        if (!success) {
-          reject(new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
-          return;
-        }
-        const valveState = this.deviceStatus.status.valve.valve.value;
-        this.log.debug(`Received valve value of ${valveState} from Smartthings`);
-        resolve(valveState === 'open' ? this.platform.Characteristic.Active.ACTIVE : this.platform.Characteristic.Active.INACTIVE);
-      });
-    });
+  async getValveState(): Promise<CharacteristicValue> {
+    const success = await this.getStatus();
+    if (!success) {
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
+    const valveState = this.deviceStatus?.status?.valve?.valve?.value;
+    this.log.debug(`Received valve value of ${valveState} from Smartthings`);
+    return valveState === 'open'
+      ? this.platform.Characteristic.Active.ACTIVE
+      : this.platform.Characteristic.Active.INACTIVE;
   }
 
-  // Set the target state of the valve
+  async getValveInUse(): Promise<CharacteristicValue> {
+    const success = await this.getStatus();
+    if (!success) {
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
+    const valveState = this.deviceStatus?.status?.valve?.valve?.value;
+    return valveState === 'open'
+      ? this.platform.Characteristic.InUse.IN_USE
+      : this.platform.Characteristic.InUse.NOT_IN_USE;
+  }
+
   async setValveState(value: CharacteristicValue) {
     this.log.debug('Received setValveState(' + value + ') event for ' + this.name);
 
@@ -48,23 +71,31 @@ export class ValveService extends BaseService {
       this.log.error(this.name + ' is offline');
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
-    const command = value === this.platform.Characteristic.Active.ACTIVE ? 'open' : 'close';
-    this.multiServiceAccessory.sendCommand('valve', command).then((success) => {
-      if (success) {
-        this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
-        this.multiServiceAccessory.forceNextStatusRefresh();
-        // this.deviceStatus.timestamp = 0; // Force refresh
-      } else {
-        this.log.error(`Command failed for ${this.name}`);
-      }
-    });
+    const isOpen = value === this.platform.Characteristic.Active.ACTIVE;
+    const command = isOpen ? 'open' : 'close';
+    const success = await this.multiServiceAccessory.sendCommand('valve', command);
+    if (success) {
+      this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);
+      this.service.updateCharacteristic(
+        this.platform.Characteristic.InUse,
+        isOpen ? this.platform.Characteristic.InUse.IN_USE : this.platform.Characteristic.InUse.NOT_IN_USE,
+      );
+      this.multiServiceAccessory.forceNextStatusRefresh();
+    } else {
+      this.log.error(`Command failed for ${this.name}`);
+    }
   }
 
   public processEvent(event: ShortEvent): void {
     this.log.debug(`Event updating valve capability for ${this.name} to ${event.value}`);
-    this.service.updateCharacteristic(this.platform.Characteristic.Active,
-      event.value === 'open' ? this.platform.Characteristic.Active.ACTIVE : this.platform.Characteristic.Active.INACTIVE);
+    const isOpen = event.value === 'open';
+    this.service.updateCharacteristic(
+      this.platform.Characteristic.Active,
+      isOpen ? this.platform.Characteristic.Active.ACTIVE : this.platform.Characteristic.Active.INACTIVE,
+    );
+    this.service.updateCharacteristic(
+      this.platform.Characteristic.InUse,
+      isOpen ? this.platform.Characteristic.InUse.IN_USE : this.platform.Characteristic.InUse.NOT_IN_USE,
+    );
   }
-
-
 }
