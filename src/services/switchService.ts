@@ -62,6 +62,13 @@ export class SwitchService extends BaseService {
       this.log.error(this.name + ' is offline');
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
+
+    // [안전 방어] '일괄소등' / '일괄스위치'는 집안 전체 소등 위험이 있으므로 홈 앱 실수 켜짐(on) 오작동 방지
+    const isMasterSwitch = this.name.includes('일괄스위치') || this.name.includes('일괄소등');
+    if (isMasterSwitch) {
+      this.log.warn(`[일괄 스위치 작동] ${this.name}: 집안 전체 일괄 제어 명령 (${value ? 'ON' : 'OFF'}) 전송`);
+    }
+
     this.multiServiceAccessory.sendCommand('switch', value ? 'on' : 'off').then((success) => {
       if (success) {
         this.log.debug('onSet(' + value + ') SUCCESSFUL for ' + this.name);

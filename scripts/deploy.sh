@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
-PI_HOST="pi@172.30.1.15"
+# 대상 라즈베리파이 주소 (환경변수 PI_HOST가 있으면 우선 사용, 없으면 기본값)
+PI_HOST="${PI_HOST:-pi@172.30.1.15}"
 
 echo "🔨 1. 프로젝트 빌드 중..."
 npm run build
