@@ -71,7 +71,20 @@ export class ValveService extends BaseService {
       this.log.error(this.name + ' is offline');
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
+
     const isOpen = value === this.platform.Characteristic.Active.ACTIVE;
+
+    // 가스 안전 법규 및 사고 예방: 가스차단기는 원격 잠금(close)만 허용하고 원격 열기(open)는 차단
+    if (isOpen && (this.name.includes('가스') || this.name.toLowerCase().includes('gas'))) {
+      this.log.warn(`[안전 방어] ${this.name}: 가스 밸브 원격 열기는 안전 법규 및 사고 방지를 위해 차단되었습니다. 수동으로 밸브를 열어주세요.`);
+      // 홈 앱 UI 상태를 즉시 '잠김(INACTIVE)'으로 되돌림
+      setTimeout(() => {
+        this.service.updateCharacteristic(this.platform.Characteristic.Active, this.platform.Characteristic.Active.INACTIVE);
+        this.service.updateCharacteristic(this.platform.Characteristic.InUse, this.platform.Characteristic.InUse.NOT_IN_USE);
+      }, 500);
+      return;
+    }
+
     const command = isOpen ? 'open' : 'close';
     const success = await this.multiServiceAccessory.sendCommand('valve', command);
     if (success) {
